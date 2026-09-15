@@ -69,6 +69,7 @@ const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("opencode", "opencode"),
     ("tencentTokenHub", "tencentTokenHub"),
     ("lmstudio", "lmstudio"),
+    (crate::agent_maestro::PROVIDER_ID, "agentMaestro"),
     ("custom", "customChatCompletions"),
     ("custom_responses", "customResponses"),
     ("custom_messages", "customMessages"),
@@ -257,7 +258,9 @@ fn provider_descriptor_with_label(
             match id.as_str() {
                 crate::polish::CODEX_OAUTH_PROVIDER_ID => AuthRequirement::OAuth,
                 "gemini" => AuthRequirement::ApiKey,
-                "lmstudio" => AuthRequirement::EndpointModelOptionalApiKey,
+                "lmstudio" | crate::agent_maestro::PROVIDER_ID => {
+                    AuthRequirement::EndpointModelOptionalApiKey
+                }
                 _ => AuthRequirement::ApiKeyUnlessCustomEndpoint,
             },
             ValidationProbe::LlmText,
@@ -604,6 +607,7 @@ pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
         "stepfun" => Some("https://api.stepfun.com/v1"),
         "tencentTokenHub" => Some("https://tokenhub.tencentmaas.com/v1"),
         "lmstudio" => Some("http://localhost:1234/v1"),
+        crate::agent_maestro::PROVIDER_ID => Some(crate::agent_maestro::DEFAULT_ENDPOINT),
         _ => None,
     }
 }
@@ -1425,6 +1429,52 @@ mod tests {
         assert!(!llm_configured("lmstudio", &configuration));
         configuration.llm_model = true;
         assert!(llm_configured("lmstudio", &configuration));
+    }
+
+    #[test]
+    fn agent_maestro_requires_a_model_but_not_an_api_key() {
+        assert!(crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES.contains(
+            &crate::agent_maestro::PROVIDER_ID
+        ));
+        let descriptor =
+            provider_descriptor(ProviderKind::Llm, crate::agent_maestro::PROVIDER_ID).unwrap();
+        assert_eq!(descriptor.label_key, "agentMaestro");
+        assert_eq!(
+            descriptor.default_endpoint.as_deref(),
+            Some(crate::agent_maestro::DEFAULT_ENDPOINT)
+        );
+        assert!(descriptor.default_model.is_none());
+        assert_eq!(
+            descriptor.auth_requirement,
+            AuthRequirement::EndpointModelOptionalApiKey
+        );
+        assert_eq!(descriptor.validation_probe, ValidationProbe::LlmText);
+        assert!(descriptor.default_request_format.is_none());
+        assert!(descriptor.supported_request_formats.is_empty());
+        assert!(!api_key_required(
+            ProviderKind::Llm,
+            crate::agent_maestro::PROVIDER_ID,
+            None
+        ));
+        assert!(provider_descriptor(ProviderKind::Asr, crate::agent_maestro::PROVIDER_ID).is_none());
+        assert!(provider_descriptor(ProviderKind::Omni, crate::agent_maestro::PROVIDER_ID).is_none());
+
+        let mut configuration = CredentialConfiguration::default();
+        assert!(!llm_configured(
+            crate::agent_maestro::PROVIDER_ID,
+            &configuration
+        ));
+        configuration.llm_api_key = true;
+        configuration.llm_endpoint = true;
+        assert!(!llm_configured(
+            crate::agent_maestro::PROVIDER_ID,
+            &configuration
+        ));
+        configuration.llm_model = true;
+        assert!(llm_configured(
+            crate::agent_maestro::PROVIDER_ID,
+            &configuration
+        ));
     }
 
     #[test]
