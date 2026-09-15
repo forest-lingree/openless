@@ -2370,6 +2370,17 @@ mod tests {
                     )
                 })
             }))
+            .chain([false, true].into_iter().flat_map(|enabled| {
+                ["", "fixture-key"].map(|key| {
+                    (
+                        LlmRequestFormat::ChatCompletions,
+                        "agent-maestro",
+                        "/bridge/api/openai/v1",
+                        enabled,
+                        key,
+                    )
+                })
+            }))
         {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
@@ -2380,7 +2391,7 @@ mod tests {
                     let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
                     let headers = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
                     let body: Value = serde_json::from_slice(&request[split + 4..]).unwrap();
-                    if format == LlmRequestFormat::Responses {
+                    if format == LlmRequestFormat::Responses || preset == "agent-maestro" {
                         assert!(body.get("temperature").is_none());
                     } else {
                         assert_eq!(body["temperature"].to_string(), "0.7");
@@ -2416,6 +2427,16 @@ mod tests {
                         } else {
                             assert_eq!(body["reasoning_effort"], "none");
                             assert_eq!(body["reasoning"]["type"], "disabled");
+                        }
+                    } else if preset == "agent-maestro" {
+                        for absent in [
+                            "thinking",
+                            "enable_thinking",
+                            "reasoning",
+                            "reasoning_effort",
+                            "chat_template_kwargs",
+                        ] {
+                            assert!(body.get(absent).is_none(), "{absent} should be absent");
                         }
                     }
                     assert!(!headers.contains("chatgpt-account-id"));

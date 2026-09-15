@@ -2156,10 +2156,10 @@ mod tests {
         }
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let prefix = if preset == "opencode" {
-            "/zen/go/v1"
-        } else {
-            "/gateway/v1"
+        let prefix = match preset {
+            "opencode" => "/zen/go/v1",
+            "agent-maestro" => "/bridge/api/openai/v1",
+            _ => "/gateway/v1",
         };
         let endpoint = if gemini {
             format!("http://{}", listener.local_addr().unwrap())
@@ -2418,6 +2418,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_maestro_translation_streams_and_cancels() {
+        for cancel in [false, true] {
+            assert_translation_streams_for_protocol(
+                false,
+                crate::llm_protocol::LlmRequestFormat::ChatCompletions,
+                "agent-maestro",
+                cancel,
+                false,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
     async fn openai_translation_streams_target_before_completion() {
         assert_translation_streams_before_completion(false, false, false).await;
     }
@@ -2585,22 +2599,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_maestro_builder_uses_agent_endpoint_validation() {
+    async fn agent_maestro_builder_requires_model_then_ignores_stale_protocol_and_endpoint() {
         let store = InMemoryCredentialStore::default();
         write_channel_secret(
             &store,
             CredentialNamespace::Llm,
             "agent-maestro-channel",
-            LLM_ENDPOINT_ACCOUNT,
-            "http://127.0.0.1:23333/v1",
+            LLM_TEMPERATURE_ACCOUNT,
+            "invalid-stale-value",
         )
         .await;
-        let mut llm = ProviderInvocation::new("agent-maestro-channel", crate::agent_maestro::PROVIDER_ID);
-        llm.model = Some("fixture-model".to_string());
+        write_channel_secret(
+            &store,
+            CredentialNamespace::Llm,
+            "agent-maestro-channel",
+            crate::llm_protocol::REQUEST_FORMAT_ACCOUNT,
+            "messages",
+        )
+        .await;
         let context = DictationContext {
-            llm,
+            llm: ProviderInvocation::new("agent-maestro-channel", crate::agent_maestro::PROVIDER_ID),
             ..DictationContext::default()
         };
+
+        match build_cloud_polisher_provider(&store, &context).await {
+            Err(error) => assert_eq!(error.message, "LLM model is not configured"),
+            Ok(_) => panic!("Agent Maestro must not generate without a selected model"),
+        }
+
+        let mut context = context;
+        context.llm.model = Some("fixture-model".to_string());
+        assert!(build_cloud_polisher_provider(&store, &context).await.is_ok());
+
+        write_channel_secret(
+            &store,
+            CredentialNamespace::Llm,
+            "agent-maestro-channel",
+            LLM_ENDPOINT_ACCOUNT,
+            "http://localhost:23333/v1",
+        )
+        .await;
 
         match build_cloud_polisher_provider(&store, &context).await {
             Err(error) => {
@@ -2609,27 +2647,6 @@ mod tests {
             }
             Ok(_) => panic!("Agent Maestro must reject endpoints outside /api/openai/v1"),
         }
-    }
-
-    #[tokio::test]
-    async fn agent_maestro_builder_ignores_stale_invalid_temperature() {
-        let store = InMemoryCredentialStore::default();
-        write_channel_secret(
-            &store,
-            CredentialNamespace::Llm,
-            "agent-maestro-channel",
-            LLM_TEMPERATURE_ACCOUNT,
-            "NaN",
-        )
-        .await;
-        let mut llm = ProviderInvocation::new("agent-maestro-channel", crate::agent_maestro::PROVIDER_ID);
-        llm.model = Some("fixture-model".to_string());
-        let context = DictationContext {
-            llm,
-            ..DictationContext::default()
-        };
-
-        assert!(build_cloud_polisher_provider(&store, &context).await.is_ok());
     }
 
     #[tokio::test]
