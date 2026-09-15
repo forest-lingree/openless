@@ -356,10 +356,10 @@ Windows:       %APPDATA%\OpenLess\credentials.json
 
 Agent Maestro 让 OpenLess 可以把正在运行的 VS Code 会话里的 GitHub Copilot 模型当作纯文本 LLM provider 使用。请保持 VS Code 里的 Agent Maestro 运行中,并确保 GitHub Copilot 已登录且目标模型可用。先用 **Agent Maestro: Get API Server Status** 查看桥接状态,需要时再执行 **Agent Maestro: Start API Server** 启动 API server。这个集成不需要 MCP server。
 
-在 **OpenLess → 设置 → LLM** 中添加一个 **Agent Maestro** channel:
+在 **OpenLess → 设置 → AI 服务与模型 → 语言模型** 中添加一个 **Agent Maestro** channel:
 
 - Base URL 默认保持为 `http://127.0.0.1:23333/api/openai/v1`; 如果你用的是自定义主机、端口或 deployment prefix,请保留完整路径。
-- 如果需要 API key,请通过 **Agent Maestro: Set LLM API Key** 设置。这里要用 Agent Maestro 里配置好的 LLM key,不是 GitHub token。
+- 如果 server authentication 已禁用,API key 可以留空。否则请通过 **Agent Maestro: Set LLM API Key** 设置。这里要用 Agent Maestro 里配置好的 LLM key,不是 GitHub token。
 - 可以拉取模型列表,也可以手动输入精确的 model id。OpenLess 不会自动帮你选默认模型。
 - 保存 channel,选择它作为 active channel,然后测试连接。
 
@@ -367,9 +367,9 @@ Agent Maestro 让 OpenLess 可以把正在运行的 VS Code 会话里的 GitHub 
 
 连接错误通常很直接:连接被拒绝多半是 server、host 或 port 问题;`401` 通常表示 API key 错了或已经失效。连接测试会真的做一次小生成,因此会消耗账号用量。
 
-这个 provider 使用固定的 ChatCompletions/Copilot 默认参数,适合文本润色、翻译和 QA。它不支持 ASR、Omni 或其他音频工作流;这些请继续使用单独的 ASR provider。Agent Maestro 还可能对模型 id 做模糊匹配或 fallback,并且会把 OpenLess 的 system message 转成 VS Code LM 的 user message,所以行为和直接调用模型 API 并不完全一样。
+这个 provider 使用固定的 ChatCompletions/Copilot 默认参数,用于文本润色、翻译和 QA。它不支持 ASR、Omni 或其他音频工作流;这些请继续使用单独的 ASR provider。Agent Maestro 还可能对模型 id 做模糊匹配或 fallback,并且会把 OpenLess 的 system message 转成 VS Code LM 的 user message,所以行为和直接调用模型 API 并不完全一样。
 
-如果你使用的是自定义端口或可选的 deployment prefix,请保留完整的 API base path。发现模型时会去掉可选的 `/chat/completions` 后缀,并在 `/api/openai/v1` 之后继续拼接 `/api/v1/lm/chatModels`。loopback 地址只会连到运行 VS Code 和 Agent Maestro 的那台机器,不会跨设备共享。
+如果你使用的是自定义端口或可选的 deployment prefix,请保留完整的 API base path。发现模型时会把末尾的 `/api/openai/v1` 替换为 `/api/v1/lm/chatModels`,并在替换前先可选地去掉 `/chat/completions`,同时保留 origin、port、deployment prefix 和 query string。例如 `https://example.test/bridge/api/openai/v1` 会变成 `https://example.test/bridge/api/v1/lm/chatModels`。loopback 地址只会连到运行 OpenLess/client 的那台机器;如果 Agent Maestro 在另一台设备上,请改用可达的 server 地址。
 
 ## 文本处理原则
 

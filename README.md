@@ -351,10 +351,10 @@ You will need:
 
 Agent Maestro lets OpenLess use GitHub Copilot models from a running VS Code session as a text-only LLM provider. Keep Agent Maestro running in VS Code with GitHub Copilot signed in and the target models available. Use **Agent Maestro: Get API Server Status** to check the bridge, and **Agent Maestro: Start API Server** to start it. The MCP server is not required for this integration.
 
-In **OpenLess → Settings → LLM**, add an **Agent Maestro** channel:
+In **OpenLess → Settings → AI services & models → Language models** add an **Agent Maestro** channel:
 
 - Leave the default Base URL as `http://127.0.0.1:23333/api/openai/v1`, or keep your custom host, port, and deployment prefix intact if you are not using the default.
-- If you need an API key, set it from **Agent Maestro: Set LLM API Key**. Use the Agent Maestro LLM key that was configured for the bridge, not your GitHub token.
+- If server authentication is disabled, you can leave the API key blank. Otherwise, set it from **Agent Maestro: Set LLM API Key**. Use the Agent Maestro LLM key that was configured for the bridge, not your GitHub token.
 - Fetch the model list or type the exact model id manually. OpenLess does not pick a default model for you.
 - Save the channel, select it as the active channel, then test the connection.
 
@@ -362,9 +362,9 @@ Model discovery uses `/api/v1/lm/chatModels`, not `/models`, and filters for `ve
 
 Connection errors are usually straightforward to read: refused connections point to the server, host, or port; `401` usually means the API key is wrong or stale. The connection test performs a real small generation, so it consumes account usage.
 
-This provider uses fixed ChatCompletions/Copilot defaults that work well for text polishing, translation, and QA. It does not support ASR, Omni, or other audio workflows; keep those on a separate ASR provider. Agent Maestro may fuzzy-match or fall back to a nearby model id, and it translates OpenLess system messages into VS Code LM user messages, so behavior is not identical to calling the model API directly.
+This provider uses fixed ChatCompletions/Copilot defaults for text polishing, translation, and QA. It does not support ASR, Omni, or other audio workflows; keep those on a separate ASR provider. Agent Maestro may fuzzy-match or fall back to a nearby model id, and it translates OpenLess system messages into VS Code LM user messages, so behavior is not identical to calling the model API directly.
 
-If you use a custom port or optional deployment prefix, preserve the full API base path. The discovery request only strips an optional trailing `/chat/completions` and still ends at `/api/openai/v1` before appending `/api/v1/lm/chatModels`. A loopback address only reaches the machine running VS Code and Agent Maestro, not another device on the network.
+If you use a custom port or optional deployment prefix, preserve the full API base path. The discovery request replaces the terminal `/api/openai/v1` segment, after optionally stripping a trailing `/chat/completions`, with `/api/v1/lm/chatModels` while keeping the origin, port, deployment prefix, and query string. For example, `https://example.test/bridge/api/openai/v1` becomes `https://example.test/bridge/api/v1/lm/chatModels`. A loopback address only reaches the machine running OpenLess/client; if Agent Maestro is on another device, configure a reachable server address instead.
 
 ## Prompt-handling principles
 
