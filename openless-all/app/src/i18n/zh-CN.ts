@@ -1211,6 +1211,7 @@ export const zhCN = {
         opencode: 'OpenCode Zen',
         tencentTokenHub: '腾讯云 TokenHub',
         lmstudio: 'LM Studio',
+        agentMaestro: 'Agent Maestro',
         customChatCompletions: '自定义 · Chat Completions',
         customResponses: '自定义 · Responses',
         customMessages: '自定义 · Messages',
@@ -1283,6 +1284,8 @@ export const zhCN = {
         '使用腾讯云「语音识别」服务的 API 密钥。默认 Hy-ASR-3.0-preview 支持中英与 20 种方言；Preview 仅支持 60 秒以内的 16kHz 单声道 PCM，暂不支持上下文或热词增强。',
       tencentTokenHubNote:
         '仅显示当前在线的语言模型。部分模型始终启用思考；关闭思考开关时将沿用该模型的固定行为。',
+      agentMaestroHint:
+        '请保持 VS Code 中的 Agent Maestro 运行并登录 Copilot。获取 Copilot 模型或手动填写模型 ID；若列表为空，请检查 Copilot 模型权限。API Key 可选，服务端设置后需填写相同的 Key。生成参数沿用 Copilot 默认值。',
       localAsrActiveNotice: '当前已启用「{{name}}」，可在「高级」中切换或禁用。',
       localAsrTakeoverHint: '启动「{{name}}」后，ASR 提供商将被接管。',
       asrProviderTakenOver:
@@ -1365,6 +1368,8 @@ export const zhCN = {
         '允许使用 HTTP Endpoint，但请注意：API Key 和音频内容可能在传输中泄漏。',
       endpointHttpWarning: '允许使用 HTTP Endpoint，但请注意：API Key 和请求内容可能在传输中泄漏。',
       endpointInvalid: 'Endpoint 格式不合法。',
+      agentMaestroEndpointInvalid:
+        '请填写以 /api/openai/v1 结尾的 HTTP(S) Base URL，也可附加 /chat/completions。',
       bailianEndpointSchemeInvalid:
         '百炼实时 ASR 走 DashScope WebSocket 网关，接口地址必须以 wss:// 开头（默认 wss://dashscope.aliyuncs.com/api-ws/v1/inference/）；https:// 的兼容模式地址在此不可用。',
       qwen3EndpointSchemeInvalid:
@@ -1376,6 +1381,8 @@ export const zhCN = {
       endpointMissing: 'Endpoint 为空。',
       volcengineAppIdMissing: 'APP ID 为空。',
       volcengineAccessTokenMissing: 'Access Token 为空。',
+      agentMaestroModelsInvalid:
+        'Agent Maestro 返回的模型列表格式无效，请检查 API 地址和服务端版本。',
       requestTimeout: '请求超时，请稍后重试。',
     },
     shortcuts: {

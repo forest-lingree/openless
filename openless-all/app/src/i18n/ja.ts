@@ -1242,6 +1242,7 @@ export const ja: typeof zhCN = {
         '2つのモードは完全に独立した認証情報を使用します。切り替えてももう一方の設定は削除されず、切り戻せば復元されます。',
       presets: {
         lmstudio: 'LM Studio',
+        agentMaestro: 'Agent Maestro',
         ark: 'ARK（Volcengine Ark）',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
@@ -1333,6 +1334,8 @@ export const ja: typeof zhCN = {
         'Tencent Cloud 音声認識 API の認証情報を使用します。既定の Hy-ASR-3.0-preview は中国語・英語・20 方言に対応します。Preview は 60 秒以内の 16kHz モノラル PCM のみ対応し、コンテキストとホットワード強化は未対応です。',
       tencentTokenHubNote:
         '現在オンラインの言語モデルのみを表示します。一部のモデルは常に思考を使用し、思考をオフにしてもモデル固有の動作を維持します。',
+      agentMaestroHint:
+        'VS Code で Agent Maestro を起動したまま Copilot にサインインしてください。Copilot モデルを取得するか、モデル ID を手動入力します。モデルが表示されない場合は Copilot の利用権限を確認してください。API Key は任意です。サーバー側で設定している場合は、ここでも同じ Key を使ってください。生成パラメータは Copilot の既定値を使用します。',
       localAsrActiveNotice:
         '現在「{{name}}」を使用中。「詳細設定」タブから切り替えまたは無効化できます。',
       localAsrTakeoverHint: '「{{name}}」を有効化すると ASR プロバイダーが引き継がれます。',
@@ -1426,6 +1429,8 @@ export const ja: typeof zhCN = {
       endpointHttpWarning:
         'HTTP Endpoint も使用できますが、API Key とリクエスト内容が通信中に漏えいする可能性があります。',
       endpointInvalid: 'Endpoint の形式が無効です。',
+      agentMaestroEndpointInvalid:
+        'HTTP(S) の Base URL は /api/openai/v1 で終わる必要があります。末尾に /chat/completions を付けてもかまいません。',
       bailianEndpointSchemeInvalid:
         'Bailian リアルタイム ASR は DashScope の WebSocket ゲートウェイを使用します。エンドポイントは wss:// で始まる必要があります（既定: wss://dashscope.aliyuncs.com/api-ws/v1/inference/）。https:// の互換モード URL はここでは使用できません。',
       qwen3EndpointSchemeInvalid:
@@ -1437,6 +1442,8 @@ export const ja: typeof zhCN = {
       endpointMissing: 'Endpoint が空です。',
       volcengineAppIdMissing: 'APP ID が空です。',
       volcengineAccessTokenMissing: 'Access Token が空です。',
+      agentMaestroModelsInvalid:
+        'Agent Maestro から無効なモデル一覧が返されました。API アドレスとサーバーのバージョンを確認してください。',
       requestTimeout: 'リクエストがタイムアウトしました。後で再試行してください。',
     },
     shortcuts: {

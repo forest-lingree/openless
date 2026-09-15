@@ -1,19 +1,40 @@
 import { listProviderDescriptors, type ProviderKind } from './providers';
 import generated from './provider-descriptors.generated.json';
 
-const preview = generated.llm.find((descriptor) => descriptor.providerType === 'lmstudio');
-const lmstudio = (await listProviderDescriptors('llm')).find(
-  (descriptor) => descriptor.providerType === 'lmstudio',
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
+function assertDescriptorMatches(providerType: string) {
+  const expected = generated.llm.find((descriptor) => descriptor.providerType === providerType);
+  const actual = llmDescriptors.find((descriptor) => descriptor.providerType === providerType);
+  assert(expected, `${providerType}: grouped preview snapshot is missing`);
+  assert(actual, `${providerType}: runtime descriptor is missing`);
+  const keys = new Set([...Object.keys(expected), ...Object.keys(actual)]);
+  for (const key of keys) {
+    assert(
+      JSON.stringify(actual[key as keyof typeof actual]) ===
+        JSON.stringify(expected[key as keyof typeof expected]),
+      `${providerType}: descriptor mismatch for ${key}`,
+    );
+  }
+}
+
+const llmDescriptors = await listProviderDescriptors('llm');
+assertDescriptorMatches('lmstudio');
+assertDescriptorMatches('agent-maestro');
+assert(
+  !(await listProviderDescriptors('asr')).some(
+    (descriptor) => descriptor.providerType === 'agent-maestro',
+  ),
+  'Agent Maestro must not appear in ASR descriptors',
 );
-if (
-  !preview ||
-  !lmstudio ||
-  Object.entries(lmstudio).some(
-    ([key, value]) =>
-      JSON.stringify(value) !== JSON.stringify(preview[key as keyof typeof preview]),
-  )
-)
-  throw new Error('LM Studio preview snapshots must agree');
+assert(
+  !(await listProviderDescriptors('omni')).some(
+    (descriptor) => descriptor.providerType === 'agent-maestro',
+  ),
+  'Agent Maestro must not appear in Omni descriptors',
+);
 
 for (const kind of ['asr', 'llm', 'omni'] as ProviderKind[]) {
   const descriptors = await listProviderDescriptors(kind);
