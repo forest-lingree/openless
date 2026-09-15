@@ -352,6 +352,25 @@ Windows:       %APPDATA%\OpenLess\credentials.json
 - **讯飞实时语音转写（RTASR）**:AppID、API Key。见 [docs/xfyun-asr.md](docs/xfyun-asr.md)。
 - **Ark 润色**:API Key、Model ID、Endpoint。Ark 默认端点为 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`。
 
+## 使用 Agent Maestro 作为文本 LLM provider
+
+Agent Maestro 让 OpenLess 可以把正在运行的 VS Code 会话里的 GitHub Copilot 模型当作纯文本 LLM provider 使用。请保持 VS Code 里的 Agent Maestro 运行中,并确保 GitHub Copilot 已登录且目标模型可用。先用 **Agent Maestro: Get API Server Status** 查看桥接状态,需要时再执行 **Agent Maestro: Start API Server** 启动 API server。这个集成不需要 MCP server。
+
+在 **OpenLess → 设置 → LLM** 中添加一个 **Agent Maestro** channel:
+
+- Base URL 默认保持为 `http://127.0.0.1:23333/api/openai/v1`; 如果你用的是自定义主机、端口或 deployment prefix,请保留完整路径。
+- 如果需要 API key,请通过 **Agent Maestro: Set LLM API Key** 设置。这里要用 Agent Maestro 里配置好的 LLM key,不是 GitHub token。
+- 可以拉取模型列表,也可以手动输入精确的 model id。OpenLess 不会自动帮你选默认模型。
+- 保存 channel,选择它作为 active channel,然后测试连接。
+
+模型发现走的是 `/api/v1/lm/chatModels`,不是 `/models`,并且只筛选 `vendor = copilot`。如果列表为空,通常说明当前登录的 VS Code 会话里没有 Copilot 访问权限。即使拉取模型失败,OpenLess 也会保留你已选的模型,所以你仍然可以手动测试。
+
+连接错误通常很直接:连接被拒绝多半是 server、host 或 port 问题;`401` 通常表示 API key 错了或已经失效。连接测试会真的做一次小生成,因此会消耗账号用量。
+
+这个 provider 使用固定的 ChatCompletions/Copilot 默认参数,适合文本润色、翻译和 QA。它不支持 ASR、Omni 或其他音频工作流;这些请继续使用单独的 ASR provider。Agent Maestro 还可能对模型 id 做模糊匹配或 fallback,并且会把 OpenLess 的 system message 转成 VS Code LM 的 user message,所以行为和直接调用模型 API 并不完全一样。
+
+如果你使用的是自定义端口或可选的 deployment prefix,请保留完整的 API base path。发现模型时会去掉可选的 `/chat/completions` 后缀,并在 `/api/openai/v1` 之后继续拼接 `/api/v1/lm/chatModels`。loopback 地址只会连到运行 VS Code 和 Agent Maestro 的那台机器,不会跨设备共享。
+
 ## 文本处理原则
 
 OpenLess 的润色模型只重塑文本。它不回答问题、不执行任务、不分析你的项目。每次听写都是一次独立请求,提示词中明确告知模型:
