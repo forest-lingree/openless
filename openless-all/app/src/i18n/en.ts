@@ -1272,6 +1272,7 @@ export const en: typeof zhCN = {
         opencode: 'OpenCode Zen',
         tencentTokenHub: 'Tencent Cloud TokenHub',
         lmstudio: 'LM Studio',
+        agentMaestro: 'Agent Maestro',
         customChatCompletions: 'Custom · Chat Completions',
         customResponses: 'Custom · Responses',
         customMessages: 'Custom · Messages',
@@ -1346,6 +1347,8 @@ export const en: typeof zhCN = {
         'Uses Tencent Cloud Speech Recognition API credentials. The default Hy-ASR-3.0-preview supports Chinese, English, and 20 dialects; Preview accepts only mono 16 kHz PCM up to 60 seconds and does not yet support context or hotword boosting.',
       tencentTokenHubNote:
         "Only online language models are listed. Some models always use reasoning; turning reasoning off keeps that model's fixed behavior.",
+      agentMaestroHint:
+        'Keep Agent Maestro running in VS Code and sign in to Copilot. Fetch a Copilot model or enter its ID. If no models appear, check Copilot access. The API key is optional; if configured on the server, use the same key here. Generation uses Copilot defaults.',
       localAsrActiveNotice:
         'Local ASR ({{name}}) is currently active. Switch or disable it from the Advanced tab.',
       localAsrTakeoverHint: 'Once "{{name}}" is enabled, the ASR provider will be taken over.',
@@ -1441,6 +1444,8 @@ export const en: typeof zhCN = {
       endpointHttpWarning:
         'HTTP endpoints are allowed, but API keys and request content may leak in transit.',
       endpointInvalid: 'Endpoint format is invalid.',
+      agentMaestroEndpointInvalid:
+        'Use an HTTP(S) Base URL ending in /api/openai/v1, optionally followed by /chat/completions.',
       bailianEndpointSchemeInvalid:
         'Bailian realtime ASR uses the DashScope WebSocket gateway: the endpoint must start with wss:// (default: wss://dashscope.aliyuncs.com/api-ws/v1/inference/). An https:// compatible-mode URL will not work here.',
       qwen3EndpointSchemeInvalid:
@@ -1452,6 +1457,8 @@ export const en: typeof zhCN = {
       endpointMissing: 'Endpoint is empty.',
       volcengineAppIdMissing: 'APP ID is empty.',
       volcengineAccessTokenMissing: 'Access Token is empty.',
+      agentMaestroModelsInvalid:
+        'Agent Maestro returned an invalid model list. Check the API address and server version.',
       requestTimeout: 'Request timed out. Try again later.',
     },
     shortcuts: {

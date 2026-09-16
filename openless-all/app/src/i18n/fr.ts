@@ -1297,6 +1297,7 @@ export const fr: typeof zhCN = {
         'Les deux modes conservent des identifiants distincts. Changer de mode garde l’autre configuration sans l’utiliser ; elle est restaurée à votre retour.',
       presets: {
         lmstudio: 'LM Studio',
+        agentMaestro: 'Agent Maestro',
         opencode: 'OpenCode Zen',
         tencentTokenHub: 'TokenHub Tencent Cloud',
         customChatCompletions: 'Personnalisé · Chat Completions',
@@ -1388,6 +1389,8 @@ export const fr: typeof zhCN = {
         'Utilise les identifiants du service de reconnaissance vocale de Tencent Cloud. Le modèle par défaut Hy-ASR-3.0-preview prend en charge le chinois, l’anglais et 20 dialectes ; Preview n’accepte que le PCM mono 16 kHz jusqu’à 60 secondes et ne gère pas encore le contexte ni le renforcement de mots-clés.',
       tencentTokenHubNote:
         'Seuls les modèles de langage disponibles en ligne sont listés. Certains modèles raisonnent toujours ; désactiver le raisonnement conserve le comportement fixe du modèle.',
+      agentMaestroHint:
+        'Gardez Agent Maestro en cours d’exécution dans VS Code et connectez-vous à Copilot. Récupérez un modèle Copilot ou saisissez son ID manuellement. Si aucun modèle n’apparaît, vérifiez votre accès à Copilot. La clé API est facultative ; si elle est configurée côté serveur, utilisez ici la même clé. La génération utilise les valeurs par défaut de Copilot.',
       localAsrActiveNotice:
         'L’ASR local ({{name}}) est actif. Changez-le ou désactivez-le dans l’onglet Avancé.',
       localAsrTakeoverHint: 'Une fois activé, « {{name}} » remplacera le fournisseur ASR.',
@@ -1488,6 +1491,8 @@ export const fr: typeof zhCN = {
       endpointHttpWarning:
         'Les adresses HTTP sont autorisées, mais les clés API et le contenu des requêtes peuvent être exposés pendant le transfert.',
       endpointInvalid: 'Le format de l’adresse est invalide.',
+      agentMaestroEndpointInvalid:
+        'Utilisez une Base URL HTTP(S) se terminant par /api/openai/v1 ; elle peut aussi se terminer par /chat/completions.',
       bailianEndpointSchemeInvalid:
         'L’ASR en temps réel de Bailian utilise la passerelle WebSocket de DashScope. L’adresse doit commencer par wss:// (par défaut : wss://dashscope.aliyuncs.com/api-ws/v1/inference/). Une URL https:// de mode compatible ne fonctionne pas ici.',
       qwen3EndpointSchemeInvalid:
@@ -1500,6 +1505,8 @@ export const fr: typeof zhCN = {
       endpointMissing: 'L’adresse est vide.',
       volcengineAppIdMissing: 'APP ID est vide.',
       volcengineAccessTokenMissing: 'Access Token est vide.',
+      agentMaestroModelsInvalid:
+        'Agent Maestro a renvoyé une liste de modèles invalide. Vérifiez l’adresse de l’API et la version du serveur.',
       requestTimeout: 'Le délai de la requête est dépassé. Réessayez plus tard.',
     },
     shortcuts: {

@@ -1234,6 +1234,7 @@ export const ko: typeof zhCN = {
         '두 모드는 완전히 분리된 자격 증명을 사용합니다. 전환해도 다른 쪽 설정은 삭제되지 않으며, 다시 전환하면 복원됩니다.',
       presets: {
         lmstudio: 'LM Studio',
+        agentMaestro: 'Agent Maestro',
         ark: 'ARK (Volcengine Ark)',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
@@ -1325,6 +1326,8 @@ export const ko: typeof zhCN = {
         'Tencent Cloud 음성 인식 API 자격 증명을 사용합니다. 기본 Hy-ASR-3.0-preview는 중국어·영어·20개 방언을 지원합니다. Preview는 60초 이내의 16kHz 모노 PCM만 지원하며, 컨텍스트와 핫워드 강화는 아직 지원하지 않습니다.',
       tencentTokenHubNote:
         '현재 온라인인 언어 모델만 표시합니다. 일부 모델은 항상 추론을 사용하며, 추론을 꺼도 해당 모델의 고정 동작을 유지합니다.',
+      agentMaestroHint:
+        'VS Code에서 Agent Maestro를 실행한 상태로 Copilot에 로그인해 두세요. Copilot 모델을 가져오거나 모델 ID를 직접 입력할 수 있습니다. 목록이 비어 있으면 Copilot 모델 접근 권한을 확인하세요. API Key는 선택 사항이며, 서버에 설정되어 있다면 여기에도 같은 Key를 입력하세요. 생성 파라미터는 Copilot 기본값을 사용합니다.',
       localAsrActiveNotice:
         '현재 "{{name}}" 사용 중. "고급" 탭에서 전환 또는 비활성화할 수 있습니다.',
       localAsrTakeoverHint: '"{{name}}" 활성화 시 ASR 프로바이더가 인수됩니다.',
@@ -1417,6 +1420,8 @@ export const ko: typeof zhCN = {
       endpointHttpWarning:
         'HTTP Endpoint 를 사용할 수 있지만, API Key 와 요청 내용이 전송 중 유출될 수 있습니다.',
       endpointInvalid: 'Endpoint 형식이 올바르지 않습니다.',
+      agentMaestroEndpointInvalid:
+        '/api/openai/v1 로 끝나는 HTTP(S) Base URL 을 입력하세요. 필요하면 뒤에 /chat/completions 를 붙일 수 있습니다.',
       bailianEndpointSchemeInvalid:
         'Bailian 실시간 ASR은 DashScope WebSocket 게이트웨이를 사용합니다. 엔드포인트는 wss://로 시작해야 합니다(기본값: wss://dashscope.aliyuncs.com/api-ws/v1/inference/). https:// 호환 모드 주소는 여기서 사용할 수 없습니다.',
       qwen3EndpointSchemeInvalid:
@@ -1428,6 +1433,8 @@ export const ko: typeof zhCN = {
       endpointMissing: 'Endpoint 가 비어 있습니다.',
       volcengineAppIdMissing: 'APP ID 가 비어 있습니다.',
       volcengineAccessTokenMissing: 'Access Token 이 비어 있습니다.',
+      agentMaestroModelsInvalid:
+        'Agent Maestro가 잘못된 모델 목록을 반환했습니다. API 주소와 서버 버전을 확인하세요.',
       requestTimeout: '요청 시간이 초과되었습니다. 잠시 후 다시 시도하세요.',
     },
     shortcuts: {

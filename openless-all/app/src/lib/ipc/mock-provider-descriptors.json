@@ -229,6 +229,18 @@
   },
   {
     "kind": "llm",
+    "providerType": "agent-maestro",
+    "labelKey": "agentMaestro",
+    "defaultEndpoint": "http://127.0.0.1:23333/api/openai/v1",
+    "defaultModel": null,
+    "authRequirement": "endpoint_model_optional_api_key",
+    "validationProbe": "llm_text",
+    "staticModels": [],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "llm",
     "providerType": "custom",
     "labelKey": "customChatCompletions",
     "defaultEndpoint": null,

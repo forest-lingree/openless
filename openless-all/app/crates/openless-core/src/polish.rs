@@ -510,7 +510,12 @@ pub struct OpenAICompatibleLLMProvider {
 }
 
 impl OpenAICompatibleLLMProvider {
-    pub fn new(config: OpenAICompatibleConfig) -> Self {
+    pub fn new(mut config: OpenAICompatibleConfig) -> Self {
+        if config.provider_id.trim() == crate::agent_maestro::PROVIDER_ID {
+            config.protocol = LlmProtocolConfig::default();
+            config.temperature = None;
+            config.thinking_enabled = false;
+        }
         // Reuse a cached client (keyed by timeout + proxy-bypass) so the connection
         // pool survives across utterances instead of paying a fresh TLS handshake
         // every polish. Falls back to a default client if the builder somehow fails
@@ -1807,6 +1812,9 @@ pub(crate) fn apply_openai_compatible_thinking_control(
     model: &str,
     thinking_enabled: bool,
 ) {
+    if provider_id.trim() == crate::agent_maestro::PROVIDER_ID {
+        return;
+    }
     if provider_id.trim() == "tencentTokenHub" {
         apply_tokenhub_chat_thinking_control(body, model, thinking_enabled);
         return;
@@ -2362,6 +2370,17 @@ mod tests {
                     )
                 })
             }))
+            .chain([false, true].into_iter().flat_map(|enabled| {
+                ["", "fixture-key"].map(|key| {
+                    (
+                        LlmRequestFormat::ChatCompletions,
+                        "agent-maestro",
+                        "/bridge/api/openai/v1",
+                        enabled,
+                        key,
+                    )
+                })
+            }))
         {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
@@ -2372,7 +2391,7 @@ mod tests {
                     let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
                     let headers = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
                     let body: Value = serde_json::from_slice(&request[split + 4..]).unwrap();
-                    if format == LlmRequestFormat::Responses {
+                    if format == LlmRequestFormat::Responses || preset == "agent-maestro" {
                         assert!(body.get("temperature").is_none());
                     } else {
                         assert_eq!(body["temperature"].to_string(), "0.7");
@@ -2408,6 +2427,16 @@ mod tests {
                         } else {
                             assert_eq!(body["reasoning_effort"], "none");
                             assert_eq!(body["reasoning"]["type"], "disabled");
+                        }
+                    } else if preset == "agent-maestro" {
+                        for absent in [
+                            "thinking",
+                            "enable_thinking",
+                            "reasoning",
+                            "reasoning_effort",
+                            "chat_template_kwargs",
+                        ] {
+                            assert!(body.get(absent).is_none(), "{absent} should be absent");
                         }
                     }
                     assert!(!headers.contains("chatgpt-account-id"));
@@ -3701,6 +3730,48 @@ mod tests {
                     }
                     assert!(body.get("reasoning_effort").is_none());
                     assert!(body.get("reasoning").is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn agent_maestro_chat_body_forces_chat_completions_without_temperature_or_thinking() {
+        for thinking_enabled in [false, true] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    crate::agent_maestro::PROVIDER_ID,
+                    "test",
+                    "http://deepseek.example.test/api/openai/v1",
+                    "",
+                    "fixture-model",
+                )
+                .with_temperature(Some(0.7))
+                .with_thinking_enabled(thinking_enabled)
+                .with_protocol(LlmProtocolConfig {
+                    format: LlmRequestFormat::Messages,
+                    ..Default::default()
+                }),
+            );
+
+            assert_eq!(provider.config.protocol.format, LlmRequestFormat::ChatCompletions);
+            for stream in [false, true] {
+                let body = provider.chat_body(
+                    stream,
+                    vec![json!({ "role": "user", "content": "hi" })],
+                );
+                assert_eq!(body["model"], "fixture-model");
+                assert_eq!(body["messages"], json!([{ "role": "user", "content": "hi" }]));
+                assert_eq!(body["stream"], stream);
+                for absent in [
+                    "temperature",
+                    "thinking",
+                    "enable_thinking",
+                    "reasoning",
+                    "reasoning_effort",
+                    "chat_template_kwargs",
+                ] {
+                    assert!(body.get(absent).is_none(), "{absent} should be absent");
                 }
             }
         }
