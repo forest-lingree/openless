@@ -49,6 +49,14 @@ impl LlmRequestFormat {
         )
     }
 
+    pub fn supported_for(provider: &str) -> Vec<Self> {
+        match provider {
+            "azure-openai" => vec![Self::ChatCompletions, Self::Responses],
+            _ if Self::selectable(provider) => Self::ALL.to_vec(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn parse(value: &str) -> Result<Self, BackendError> {
         match value.trim() {
             "chat_completions" => Ok(Self::ChatCompletions),
@@ -172,7 +180,7 @@ impl LlmProtocolConfig {
                 config.apply(account, value.expose_secret())?;
             }
         }
-        config.validate()?;
+        config.validate_for_provider(provider)?;
         Ok(config)
     }
 
@@ -212,6 +220,21 @@ impl LlmProtocolConfig {
         }
         Ok(())
     }
+
+    pub fn validate_for_provider(&self, provider: &str) -> Result<(), BackendError> {
+        self.validate()?;
+        validate_provider_format(provider, self.format)
+    }
+}
+
+pub fn validate_provider_format(
+    provider: &str,
+    format: LlmRequestFormat,
+) -> Result<(), BackendError> {
+    if provider == "azure-openai" && format == LlmRequestFormat::Messages {
+        return Err(config_error("azureUnsupportedProtocol"));
+    }
+    Ok(())
 }
 
 fn positive_tokens(value: &str) -> Result<u32, BackendError> {
@@ -238,27 +261,29 @@ pub(crate) fn request_body(
         LlmRequestFormat::Responses => {
             let mut body =
                 json!({"model": config.model, "stream": stream, "store": false, "input": messages});
-            let model = config
-                .model
-                .trim()
-                .strip_prefix("openai/")
-                .unwrap_or(config.model.trim())
-                .to_ascii_lowercase();
-            // 已知普通模型不接受 reasoning；未知网关模型按所选兼容协议声明参数。
-            if !(model.starts_with("gpt-4")
-                || model.starts_with("gpt-3.5")
-                || model.starts_with("chatgpt-4"))
-            {
-                let effort = if model.starts_with("gpt-5-pro")
-                    || model.contains("-pro") && model.starts_with("gpt-5.")
+            if config.provider_id.trim() != crate::azure_openai::PROVIDER_ID {
+                let model = config
+                    .model
+                    .trim()
+                    .strip_prefix("openai/")
+                    .unwrap_or(config.model.trim())
+                    .to_ascii_lowercase();
+                // 已知普通模型不接受 reasoning；未知网关模型按所选兼容协议声明参数。
+                if !(model.starts_with("gpt-4")
+                    || model.starts_with("gpt-3.5")
+                    || model.starts_with("chatgpt-4"))
                 {
-                    "high"
-                } else if config.thinking_enabled {
-                    "medium"
-                } else {
-                    "low"
-                };
-                body["reasoning"] = json!({"effort": effort});
+                    let effort = if model.starts_with("gpt-5-pro")
+                        || model.contains("-pro") && model.starts_with("gpt-5.")
+                    {
+                        "high"
+                    } else if config.thinking_enabled {
+                        "medium"
+                    } else {
+                        "low"
+                    };
+                    body["reasoning"] = json!({"effort": effort});
+                }
             }
             body
         }
@@ -579,6 +604,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn azure_load_rejects_messages_but_accepts_chat_and_responses() {
+        let store = InMemoryCredentialStore::default();
+        let key = CredentialKey::new(
+            CredentialNamespace::Llm,
+            Some("azure".into()),
+            REQUEST_FORMAT_ACCOUNT,
+        )
+        .unwrap();
+
+        assert_eq!(
+            LlmProtocolConfig::load(&store, "azure", "azure-openai")
+                .await
+                .unwrap()
+                .format,
+            LlmRequestFormat::ChatCompletions
+        );
+
+        store
+            .write(key.clone(), SecretValue::new("responses"))
+            .await
+            .unwrap();
+        assert_eq!(
+            LlmProtocolConfig::load(&store, "azure", "azure-openai")
+                .await
+                .unwrap()
+                .format,
+            LlmRequestFormat::Responses
+        );
+
+        store
+            .write(key, SecretValue::new("messages"))
+            .await
+            .unwrap();
+        let error = LlmProtocolConfig::load(&store, "azure", "azure-openai")
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+        assert_eq!(error.message, "azureUnsupportedProtocol");
+    }
+
+    #[tokio::test]
     async fn agent_maestro_ignores_stored_request_format_overrides() {
         let store = InMemoryCredentialStore::default();
         let key = CredentialKey::new(
@@ -609,7 +675,10 @@ mod tests {
     fn urls_and_auth_follow_format_without_losing_gateway_paths() {
         for descriptor in crate::provider_rules::provider_descriptors(crate::ProviderKind::Llm) {
             if LlmRequestFormat::selectable(descriptor.provider_type.as_str()) {
-                assert_eq!(descriptor.supported_request_formats, LlmRequestFormat::ALL);
+                assert_eq!(
+                    descriptor.supported_request_formats,
+                    LlmRequestFormat::supported_for(descriptor.provider_type.as_str())
+                );
                 assert_eq!(
                     descriptor.default_request_format,
                     Some(LlmRequestFormat::default_for(
@@ -758,6 +827,43 @@ mod tests {
                     assert!(body.get(absent).is_none());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn azure_request_body_treats_deployments_as_opaque_and_keeps_explicit_temperature() {
+        let messages = vec![json!({"role":"user","content":"translate this"})];
+        for model in ["writing-prod", "gpt-5"] {
+            let mut config = OpenAICompatibleConfig::new(
+                "azure-openai",
+                "Azure OpenAI",
+                "https://example.openai.azure.com/openai/v1/responses",
+                "key",
+                model,
+            )
+            .with_protocol(LlmProtocolConfig {
+                format: LlmRequestFormat::Responses,
+                ..Default::default()
+            })
+            .with_thinking_enabled(true);
+
+            let body = request_body(&config, false, messages.clone());
+            assert_eq!(body["model"], json!(model));
+            assert_eq!(body["input"], json!(messages));
+            assert!(body.get("reasoning").is_none(), "{model} must stay opaque");
+            assert!(
+                body.get("temperature").is_none(),
+                "{model} keeps Azure default"
+            );
+
+            config.temperature = Some(0.7);
+            let explicit = request_body(&config, false, messages.clone());
+            assert_eq!(explicit["model"], json!(model));
+            assert_eq!(explicit["temperature"], json!(0.7));
+            assert!(
+                explicit.get("reasoning").is_none(),
+                "{model} must stay opaque"
+            );
         }
     }
 

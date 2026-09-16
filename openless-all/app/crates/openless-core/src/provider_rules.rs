@@ -25,6 +25,7 @@ const TENCENT_CLOUD_PROVIDER_ID: &str = "tencent-cloud";
 
 const ASR_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("volcengine", "asrVolcengine"),
+    ("azure-openai", "azureOpenai"),
     ("elevenlabs", "asrElevenLabs"),
     ("bailian", "asrBailian"),
     ("bailian-qwen3-realtime", "asrBailianQwen3"),
@@ -52,6 +53,7 @@ const ASR_PROVIDER_TYPES: &[(&str, &str)] = &[
 
 const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("ark", "ark"),
+    ("azure-openai", "azureOpenai"),
     ("deepseek", "deepseek"),
     ("siliconflow", "siliconflow"),
     ("atlascloud", "atlascloud"),
@@ -159,8 +161,16 @@ pub struct ProviderDescriptor {
     pub auth_requirement: AuthRequirement,
     pub validation_probe: ValidationProbe,
     pub static_models: Vec<String>,
+    #[serde(default = "default_true")]
+    pub supports_model_listing: bool,
+    #[serde(default = "default_true")]
+    pub supports_thinking: bool,
     pub default_request_format: Option<crate::llm_protocol::LlmRequestFormat>,
     pub supported_request_formats: Vec<crate::llm_protocol::LlmRequestFormat>,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 /// Match a service preset without treating custom URL credentials or parameters as presets.
@@ -257,7 +267,7 @@ fn provider_descriptor_with_label(
             default_llm_model(&id),
             match id.as_str() {
                 crate::polish::CODEX_OAUTH_PROVIDER_ID => AuthRequirement::OAuth,
-                "gemini" => AuthRequirement::ApiKey,
+                "gemini" | "azure-openai" => AuthRequirement::ApiKey,
                 "lmstudio" | crate::agent_maestro::PROVIDER_ID => {
                     AuthRequirement::EndpointModelOptionalApiKey
                 }
@@ -279,7 +289,7 @@ fn provider_descriptor_with_label(
         supported_request_formats: if kind == ProviderKind::Llm
             && crate::llm_protocol::LlmRequestFormat::selectable(&id)
         {
-            crate::llm_protocol::LlmRequestFormat::ALL.to_vec()
+            crate::llm_protocol::LlmRequestFormat::supported_for(&id)
         } else {
             Vec::new()
         },
@@ -317,6 +327,8 @@ fn provider_descriptor_with_label(
             .iter()
             .map(|model| (*model).to_string())
             .collect(),
+        supports_model_listing: id != "azure-openai",
+        supports_thinking: id != "azure-openai",
     })
 }
 
@@ -394,6 +406,7 @@ pub struct CredentialConfiguration {
     pub asr_api_key: bool,
     pub asr_endpoint: bool,
     pub asr_model: bool,
+    pub asr_azure_api_version: bool,
     pub volcengine_service: Option<String>,
     pub volcengine_auth_mode: Option<String>,
     pub volcengine_app_key: bool,
@@ -485,7 +498,7 @@ pub fn auth_requirement_satisfied(
             configuration.omni_model || descriptor.default_model.is_some(),
         ),
     };
-    match descriptor.auth_requirement {
+    let satisfied = match descriptor.auth_requirement {
         AuthRequirement::None => true,
         AuthRequirement::ApiKey => api_key && endpoint && model,
         AuthRequirement::EndpointModelOptionalApiKey => endpoint && model,
@@ -502,7 +515,11 @@ pub fn auth_requirement_satisfied(
                 && configuration.tencent_cloud_secret_key
         }
         AuthRequirement::OAuth => configuration.codex_oauth && model,
-    }
+    };
+    satisfied
+        && !(descriptor.kind == ProviderKind::Asr
+            && descriptor.provider_type.as_str() == "azure-openai"
+            && !configuration.asr_azure_api_version)
 }
 
 pub fn api_key_required(
@@ -769,7 +786,10 @@ pub fn is_stepfun_realtime_provider(id: &str) -> bool {
 }
 
 pub fn is_mimo_provider(id: &str) -> bool {
-    matches!(id, MIMO_PROVIDER_ID | crate::asr::mimo::ORCAROUTER_PROVIDER_ID)
+    matches!(
+        id,
+        MIMO_PROVIDER_ID | crate::asr::mimo::ORCAROUTER_PROVIDER_ID
+    )
 }
 
 pub fn is_dashscope_multimodal_provider(id: &str) -> bool {
@@ -791,7 +811,14 @@ pub fn is_tencent_cloud_provider(id: &str) -> bool {
 pub fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(
         id,
-        "whisper" | "siliconflow" | "zhipu" | "groq" | "openrouter" | "stepfun" | "zenmux"
+        "whisper"
+            | "siliconflow"
+            | "zhipu"
+            | "groq"
+            | "openrouter"
+            | "stepfun"
+            | "zenmux"
+            | "azure-openai"
     ) || id == OPENAI_COMPATIBLE_ASR_PROVIDER_ID
 }
 
@@ -1401,6 +1428,105 @@ mod tests {
             .flat_map(provider_descriptors)
             .collect::<Vec<_>>();
         assert_eq!(fixture, actual);
+    }
+
+    #[test]
+    fn azure_descriptors_supply_capabilities_without_defaults() {
+        use crate::llm_protocol::LlmRequestFormat;
+
+        let asr = provider_descriptor(ProviderKind::Asr, "azure-openai").unwrap();
+        assert_eq!(asr.label_key, "azureOpenai");
+        assert_eq!(asr.auth_requirement, AuthRequirement::ApiKey);
+        assert_eq!(asr.default_endpoint, None);
+        assert_eq!(asr.default_model, None);
+        assert!(asr.static_models.is_empty());
+        assert!(asr.supported_request_formats.is_empty());
+        assert_eq!(
+            active_asr_provider_kind("azure-openai"),
+            ActiveAsrProviderKind::WhisperCompatible
+        );
+        assert!(is_whisper_compatible_provider("azure-openai"));
+        assert!(crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES.contains(&"azure-openai"));
+
+        let llm = provider_descriptor(ProviderKind::Llm, "azure-openai").unwrap();
+        assert_eq!(llm.label_key, "azureOpenai");
+        assert_eq!(llm.auth_requirement, AuthRequirement::ApiKey);
+        assert_eq!(llm.default_endpoint, None);
+        assert_eq!(llm.default_model, None);
+        assert!(llm.static_models.is_empty());
+        assert_eq!(
+            llm.default_request_format,
+            Some(LlmRequestFormat::ChatCompletions)
+        );
+        assert_eq!(
+            llm.supported_request_formats,
+            vec![
+                LlmRequestFormat::ChatCompletions,
+                LlmRequestFormat::Responses
+            ]
+        );
+        assert!(!llm.supports_model_listing);
+        assert!(!llm.supports_thinking);
+        assert!(crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES.contains(&"azure-openai"));
+        assert!(provider_descriptor(ProviderKind::Omni, "azure-openai").is_none());
+    }
+
+    #[test]
+    fn azure_old_descriptor_json_defaults_capability_flags_to_true() {
+        let descriptor: ProviderDescriptor = serde_json::from_str(
+            r#"{
+                "kind":"llm",
+                "providerType":"deepseek",
+                "labelKey":"deepseek",
+                "defaultEndpoint":"https://api.deepseek.com/v1",
+                "defaultModel":"deepseek-v4-flash",
+                "authRequirement":"api_key_unless_custom_endpoint",
+                "validationProbe":"llm_text",
+                "staticModels":[],
+                "defaultRequestFormat":"chat_completions",
+                "supportedRequestFormats":["chat_completions","responses","messages"]
+            }"#,
+        )
+        .unwrap();
+        assert!(descriptor.supports_model_listing);
+        assert!(descriptor.supports_thinking);
+    }
+
+    #[test]
+    fn azure_llm_requires_key_endpoint_and_deployment() {
+        let descriptor = provider_descriptor(ProviderKind::Llm, "azure-openai").unwrap();
+        assert!(api_key_required(
+            ProviderKind::Llm,
+            "azure-openai",
+            Some("https://example.openai.azure.com")
+        ));
+
+        let mut configuration = CredentialConfiguration {
+            llm_endpoint: true,
+            llm_model: true,
+            ..CredentialConfiguration::default()
+        };
+        assert!(!auth_requirement_satisfied(&descriptor, &configuration));
+        assert!(!llm_configured("azure-openai", &configuration));
+        configuration.llm_api_key = true;
+        assert!(auth_requirement_satisfied(&descriptor, &configuration));
+        assert!(llm_configured("azure-openai", &configuration));
+    }
+
+    #[test]
+    fn azure_asr_requires_key_endpoint_deployment_and_version() {
+        let descriptor = provider_descriptor(ProviderKind::Asr, "azure-openai").unwrap();
+        let mut configuration = CredentialConfiguration {
+            asr_api_key: true,
+            asr_endpoint: true,
+            asr_model: true,
+            ..CredentialConfiguration::default()
+        };
+        assert!(!auth_requirement_satisfied(&descriptor, &configuration));
+        assert!(!asr_configured("azure-openai", &configuration, None));
+        configuration.asr_azure_api_version = true;
+        assert!(auth_requirement_satisfied(&descriptor, &configuration));
+        assert!(asr_configured("azure-openai", &configuration, None));
     }
 
     #[test]

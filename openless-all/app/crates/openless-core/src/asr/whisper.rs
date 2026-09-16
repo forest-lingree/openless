@@ -3,7 +3,11 @@
 
 use anyhow::{Context, Result};
 use base64::Engine;
+use futures_util::StreamExt;
 use parking_lot::Mutex;
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::Notify;
 
 use crate::asr::wav::encode_wav_16k_mono;
 use crate::asr::RawTranscript;
@@ -21,6 +25,7 @@ pub const PROMPT_CHAR_BUDGET: usize = 240;
 
 /// 区切り文字（ASCII）。Whisper のトークナイザはどの言語でも安定して扱える。
 const PROMPT_SEPARATOR: &str = ", ";
+const AZURE_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 /// ZenMux 聚合平台的默认端点与模型（issue #837）。与前端 `ASR_PRESETS` 的
 /// `zenmux` 条目保持一致；`read_whisper_credentials` 在 active 为 zenmux 且
@@ -57,6 +62,9 @@ pub struct WhisperBatchASR {
     /// 一等 `hotwords` 参数（JSON 数组字符串）。StepFun 等厂商不认 `prompt`
     /// （静默忽略），但提供专门的热词字段——用它词典才真正生效。空 = 不发。
     hotwords: Vec<String>,
+    azure_openai: bool,
+    azure_cancelled: AtomicBool,
+    azure_cancel_notify: Notify,
     buffer: Mutex<Vec<u8>>,
 }
 
@@ -80,8 +88,16 @@ impl WhisperBatchASR {
             language: None,
             enable_itn: true,
             hotwords: Vec::new(),
+            azure_openai: false,
+            azure_cancelled: AtomicBool::new(false),
+            azure_cancel_notify: Notify::new(),
             buffer: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn with_azure_openai(mut self) -> Self {
+        self.azure_openai = true;
+        self
     }
 
     /// 设置请求体编码方式（默认 `Multipart`）。OpenRouter 需 `OpenRouterJson`。
@@ -127,6 +143,7 @@ impl WhisperBatchASR {
     pub async fn transcribe(&self) -> Result<RawTranscript> {
         // clone 而不是 take：~30s 16 kHz 16-bit 音频 ≈ 960 KB，会话末调用一次，可接受。
         let pcm = self.buffer.lock().clone();
+        self.ensure_not_azure_cancelled()?;
         if pcm.is_empty() {
             return Ok(RawTranscript {
                 text: String::new(),
@@ -149,8 +166,10 @@ impl WhisperBatchASR {
         let mut texts = Vec::with_capacity(chunks.len());
 
         for chunk in chunks {
+            self.ensure_not_azure_cancelled()?;
             texts.push(self.transcribe_chunk(chunk).await?);
         }
+        self.ensure_not_azure_cancelled()?;
 
         Ok(RawTranscript {
             text: join_transcript_chunks(&texts),
@@ -159,6 +178,10 @@ impl WhisperBatchASR {
     }
 
     async fn transcribe_chunk(&self, pcm: &[u8]) -> Result<String> {
+        if self.azure_openai {
+            return self.transcribe_azure_chunk(pcm).await;
+        }
+
         let samples: Vec<i16> = pcm
             .as_chunks::<2>()
             .0
@@ -292,14 +315,153 @@ impl WhisperBatchASR {
         }
     }
 
+    async fn transcribe_azure_chunk(&self, pcm: &[u8]) -> Result<String> {
+        self.ensure_not_azure_cancelled()?;
+
+        let samples: Vec<i16> = pcm
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        let wav = encode_wav_16k_mono(&samples);
+        let url = transcription_url(&self.base_url)?;
+
+        let wav_part = reqwest::multipart::Part::bytes(wav)
+            .file_name("audio.wav")
+            .mime_str("audio/wav")
+            .context("set MIME type")?;
+        let mut form = reqwest::multipart::Form::new()
+            .part("file", wav_part)
+            .text("response_format", "json");
+        if let Some(prompt) = self.prompt.as_ref() {
+            let trimmed = prompt.trim();
+            if !trimmed.is_empty() {
+                form = form.text("prompt", trimmed.to_string());
+            }
+        }
+
+        let request = crate::net::credential_http_for_url(&url)
+            .post(&url)
+            .header("api-key", self.api_key.trim())
+            .multipart(form);
+        let resp = self
+            .await_azure_http(request.send(), "HTTP request")
+            .await?;
+        self.ensure_not_azure_cancelled()?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("Azure OpenAI ASR API error {}", status);
+        }
+
+        let body = self.read_azure_response_body(resp).await?;
+        self.ensure_not_azure_cancelled()?;
+        let json: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|_| anyhow::anyhow!("Azure OpenAI ASR response was not valid JSON"))?;
+        extract_azure_text(&json)
+    }
+
+    async fn await_azure_http<T>(
+        &self,
+        future: impl Future<Output = reqwest::Result<T>>,
+        operation: &'static str,
+    ) -> Result<T> {
+        self.ensure_not_azure_cancelled()?;
+        tokio::select! {
+            biased;
+            _ = self.wait_for_azure_cancel() => {
+                anyhow::bail!("Azure OpenAI ASR request cancelled")
+            }
+            result = future => {
+                match result {
+                    Ok(value) => {
+                        self.ensure_not_azure_cancelled()?;
+                        Ok(value)
+                    }
+                    Err(_) if self.azure_cancelled.load(Ordering::Acquire) => {
+                        anyhow::bail!("Azure OpenAI ASR request cancelled")
+                    }
+                    Err(error) => {
+                        anyhow::bail!(
+                            "Azure OpenAI ASR {} failed ({})",
+                            operation,
+                            crate::net::request_error_kind(&error)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    async fn read_azure_response_body(&self, resp: reqwest::Response) -> Result<Vec<u8>> {
+        let mut stream = resp.bytes_stream();
+        let mut body = Vec::new();
+        loop {
+            self.ensure_not_azure_cancelled()?;
+            tokio::select! {
+                biased;
+                _ = self.wait_for_azure_cancel() => {
+                    anyhow::bail!("Azure OpenAI ASR request cancelled")
+                }
+                next = stream.next() => {
+                    match next {
+                        Some(Ok(chunk)) => append_azure_response_chunk(&mut body, &chunk)?,
+                        Some(Err(error)) => {
+                            if self.azure_cancelled.load(Ordering::Acquire) {
+                                anyhow::bail!("Azure OpenAI ASR request cancelled");
+                            }
+                            anyhow::bail!(
+                                "Azure OpenAI ASR response read failed ({})",
+                                crate::net::request_error_kind(&error)
+                            );
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+        Ok(body)
+    }
+
+    async fn wait_for_azure_cancel(&self) {
+        loop {
+            let notified = self.azure_cancel_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.azure_cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn ensure_not_azure_cancelled(&self) -> Result<()> {
+        if self.azure_openai && self.azure_cancelled.load(Ordering::Acquire) {
+            anyhow::bail!("Azure OpenAI ASR request cancelled");
+        }
+        Ok(())
+    }
+
     pub fn cancel(&self) {
-        self.buffer.lock().clear();
+        if self.azure_openai {
+            self.azure_cancelled.store(true, Ordering::Release);
+            self.buffer.lock().clear();
+            self.azure_cancel_notify.notify_waiters();
+        } else {
+            self.buffer.lock().clear();
+        }
     }
 }
 
 impl super::AudioConsumer for WhisperBatchASR {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
-        self.buffer.lock().extend_from_slice(pcm);
+        let mut buffer = self.buffer.lock();
+        if self.azure_openai && self.azure_cancelled.load(Ordering::Acquire) {
+            buffer.clear();
+            return;
+        }
+        buffer.extend_from_slice(pcm);
     }
 }
 
@@ -379,6 +541,25 @@ fn extract_confident_text(json: &serde_json::Value) -> String {
 fn is_placeholder_heading(text: &str) -> bool {
     let trimmed = text.trim();
     !trimmed.is_empty() && trimmed.chars().all(|c| c == '#')
+}
+
+fn extract_azure_text(json: &serde_json::Value) -> Result<String> {
+    if json.get("error").is_some() {
+        anyhow::bail!("Azure OpenAI ASR response contained an error");
+    }
+    let text = json
+        .get("text")
+        .and_then(|text| text.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Azure OpenAI ASR response text must be a string"))?;
+    Ok(text.trim().to_string())
+}
+
+fn append_azure_response_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<()> {
+    if body.len().saturating_add(chunk.len()) > AZURE_MAX_RESPONSE_BYTES {
+        anyhow::bail!("Azure OpenAI ASR response too large");
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
 }
 
 fn pcm_duration_ms(pcm: &[u8]) -> u64 {
@@ -622,6 +803,10 @@ mod tests {
     use crate::asr::AudioConsumer;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc,
+    };
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -1253,6 +1438,495 @@ mod tests {
         let transcript = asr.transcribe().await.unwrap();
         assert_eq!(transcript.text, "hotwords ok");
         server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_request_uses_deployment_endpoint_api_key_and_supported_multipart_fields() {
+        let (base_url, server) = start_azure_test_server(vec![AzureFixtureResponse::ok(
+            r#"{"text":"recognized speech"}"#,
+            Some(Box::new(|request| {
+                let request_text = String::from_utf8_lossy(request);
+                let lower = request_text.to_ascii_lowercase();
+                assert!(request_text.starts_with(
+                    "POST /openai/deployments/fixture-deployment/audio/transcriptions?api-version=2025-04-01-preview HTTP/1.1"
+                ));
+                assert!(lower.contains("api-key: azure-secret"));
+                assert!(!lower.contains("authorization:"));
+                assert!(lower.contains("content-type: multipart/form-data; boundary="));
+                assert!(request_text.contains(r#"name="file"; filename="audio.wav""#));
+                assert!(lower.contains("content-type: audio/wav"));
+                assert!(request_text.contains("RIFF"));
+                assert!(request_text.contains("WAVE"));
+                assert!(request_text.contains(r#"name="response_format""#));
+                assert!(request_text.contains("json"));
+                assert!(request_text.contains(r#"name="prompt""#));
+                assert!(request_text.contains("domain context"));
+                assert!(!request_text.contains(r#"name="model""#));
+                assert!(!request_text.contains(r#"name="temperature""#));
+                assert!(!request_text.contains("verbose_json"));
+                assert!(!request_text.contains(r#"name="hotwords""#));
+            })),
+        )]);
+        let asr = WhisperBatchASR::new(
+            "azure-secret".to_string(),
+            base_url,
+            "fixture-deployment".to_string(),
+            Some("  domain context  ".to_string()),
+            None,
+            true,
+        )
+        .with_hotwords(vec!["unsupported".to_string()])
+        .with_azure_openai();
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+        let transcript = asr.transcribe().await.unwrap();
+
+        assert_eq!(transcript.text, "recognized speech");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_response_accepts_nonempty_empty_and_hash_text() {
+        for (body, expected) in [
+            (r#"{"text":"recognized speech"}"#, "recognized speech"),
+            (r#"{"text":""}"#, ""),
+            (r##"{"text":"#"}"##, "#"),
+        ] {
+            let (base_url, server) =
+                start_azure_test_server(vec![AzureFixtureResponse::ok(body, None)]);
+            let asr = azure_asr_for_url(base_url, None);
+            asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+            let transcript = asr.transcribe().await.unwrap();
+
+            assert_eq!(transcript.text, expected);
+            server.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_response_rejects_missing_non_string_error_and_malformed_json() {
+        for body in [
+            r#"{}"#,
+            r#"{"text":123}"#,
+            r#"{"error":{"code":"Unauthorized","message":"bad secret azure-secret"}}"#,
+            r#"{"text":"unterminated""#,
+        ] {
+            let (base_url, server) =
+                start_azure_test_server(vec![AzureFixtureResponse::ok(body, None)]);
+            let asr = azure_asr_for_url(base_url, None);
+            asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+            let error = asr.transcribe().await.unwrap_err().to_string();
+
+            assert!(error.contains("Azure OpenAI ASR"));
+            assert!(!error.contains("azure-secret"));
+            assert!(!error.contains("Unauthorized"));
+            server.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_http_failures_are_sanitized() {
+        for status in [401_u16, 429] {
+            let (base_url, server) = start_azure_test_server(vec![AzureFixtureResponse {
+                status,
+                content_type: "text/plain",
+                body: "credential azure-secret and api-version=2025-04-01-preview in body",
+                assert_request: None,
+            }]);
+            let asr = azure_asr_for_url(base_url, None);
+            asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+            let error = asr.transcribe().await.unwrap_err().to_string();
+
+            assert!(error.contains(&status.to_string()));
+            assert!(!error.contains("azure-secret"));
+            assert!(!error.contains("api-version=2025-04-01-preview in body"));
+            assert!(!error.contains("/openai/deployments/"));
+            server.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_response_read_error_after_partial_valid_json_is_not_success() {
+        let body = r#"{"text":"partial success"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len() + 1,
+            body
+        );
+        let (base_url, server) = start_azure_raw_response_server(vec![response]);
+        let asr = azure_asr_for_url(base_url, None);
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+        let error = asr.transcribe().await.unwrap_err().to_string();
+
+        assert!(error.contains("Azure OpenAI ASR response read failed"));
+        assert!(!error.contains("partial success"));
+        assert_eq!(asr.buffer_duration_ms(), 1_000);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_response_read_errors_return_promptly_without_retry_delay() {
+        let response =
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\nConnection: close\r\n\r\n"
+                .to_string();
+        let (base_url, server) =
+            start_azure_raw_response_server(vec![response.clone(), response.clone(), response]);
+        let asr = azure_asr_for_url(base_url, None);
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+        let started = Instant::now();
+        for _ in 0..3 {
+            let error = asr.transcribe().await.unwrap_err().to_string();
+            assert!(error.contains("Azure OpenAI ASR response read failed"));
+        }
+
+        assert!(
+            started.elapsed() < Duration::from_millis(140),
+            "read errors should not wait for a speculative cancellation grace period"
+        );
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_rejects_response_body_over_one_mib() {
+        let body = format!(r#"{{"text":"{}"}}"#, "a".repeat(1024 * 1024));
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let (base_url, server) = start_azure_raw_response_server(vec![response]);
+        let asr = azure_asr_for_url(base_url, None);
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+        let error = asr.transcribe().await.unwrap_err().to_string();
+
+        assert!(error.contains("Azure OpenAI ASR response too large"));
+        assert_eq!(asr.buffer_duration_ms(), 1_000);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn azure_chunk_limit_uses_ten_minute_pcm_boundary() {
+        let ten_minute_bytes = PCM_SAMPLE_RATE_HZ as usize * PCM_BYTES_PER_SAMPLE * 600;
+        let pcm = vec![0u8; ten_minute_bytes + PCM_BYTES_PER_SAMPLE];
+
+        let chunks = split_pcm_by_duration(&pcm, Some(crate::azure_openai::MAX_CHUNK_DURATION_MS));
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), ten_minute_bytes);
+        assert_eq!(chunks[1].len(), PCM_BYTES_PER_SAMPLE);
+    }
+
+    #[tokio::test]
+    async fn azure_chunks_are_uploaded_sequentially_and_joined() {
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&request_count);
+        let (base_url, server) = start_azure_test_server(vec![
+            AzureFixtureResponse::ok(
+                r#"{"text":"hello"}"#,
+                Some(Box::new(move |_| {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                })),
+            ),
+            AzureFixtureResponse::ok(r#"{"text":"world"}"#, Some(Box::new(move |_| {}))),
+        ]);
+        let asr = azure_asr_for_url(base_url, Some(1_000));
+        asr.consume_pcm_chunk(&vec![0u8; 64_000]);
+
+        let transcript = asr.transcribe().await.unwrap();
+
+        assert_eq!(transcript.text, "hello world");
+        assert_eq!(transcript.duration_ms, 2_000);
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_failed_second_chunk_fails_whole_transcription_and_keeps_buffer() {
+        let (base_url, server) = start_azure_test_server(vec![
+            AzureFixtureResponse::ok(r#"{"text":"first chunk"}"#, None),
+            AzureFixtureResponse {
+                status: 500,
+                content_type: "application/json",
+                body: r#"{"text":"must not become partial success"}"#,
+                assert_request: None,
+            },
+        ]);
+        let asr = azure_asr_for_url(base_url, Some(1_000));
+        asr.consume_pcm_chunk(&vec![0u8; 64_000]);
+
+        let error = asr.transcribe().await.unwrap_err().to_string();
+
+        assert!(error.contains("500"));
+        assert!(!error.contains("first chunk"));
+        assert_eq!(asr.buffer_duration_ms(), 2_000);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_cancel_before_dispatch_prevents_network_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = azure_fixture_url(listener.local_addr().unwrap());
+        let asr = azure_asr_for_url(base_url, None);
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+        asr.cancel();
+        let error = asr.transcribe().await.unwrap_err().to_string();
+
+        assert!(error.contains("cancelled"));
+        assert!(listener.accept().is_err());
+    }
+
+    #[test]
+    fn azure_cancel_prevents_late_consume_from_refilling_buffer() {
+        let asr = azure_asr_for_url(
+            "http://127.0.0.1:1/openai/deployments/fixture-deployment/audio/transcriptions?api-version=2025-04-01-preview"
+                .to_string(),
+            None,
+        );
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+        asr.cancel();
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+        assert_eq!(asr.buffer_duration_ms(), 0);
+    }
+
+    #[tokio::test]
+    async fn azure_cancel_wait_completes_when_cancel_precedes_await() {
+        let asr = azure_asr_for_url(
+            "http://127.0.0.1:1/openai/deployments/fixture-deployment/audio/transcriptions?api-version=2025-04-01-preview"
+                .to_string(),
+            None,
+        );
+        let waiter = asr.wait_for_azure_cancel();
+
+        asr.cancel();
+
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_cancel_while_request_hangs_wakes_transcribe() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = azure_fixture_url(listener.local_addr().unwrap());
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let mut stream = accept_test_connection(&listener);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let _ = read_http_request(&mut stream);
+            seen_tx.send(()).unwrap();
+            let mut one = [0u8; 1];
+            let _ = stream.read(&mut one);
+        });
+        let asr = Arc::new(azure_asr_for_url(base_url, None));
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+        let run = tokio::spawn({
+            let asr = Arc::clone(&asr);
+            async move { asr.transcribe().await }
+        });
+
+        tokio::task::spawn_blocking(move || seen_rx.recv_timeout(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
+        asr.cancel();
+        let error = tokio::time::timeout(Duration::from_secs(3), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("cancelled"));
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_cancel_while_first_chunk_response_is_blocked_prevents_later_chunks() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = azure_fixture_url(listener.local_addr().unwrap());
+        let (first_seen_tx, first_seen_rx) = mpsc::channel();
+        let (finish_response_tx, finish_response_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let mut stream = accept_test_connection(&listener);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let _ = read_http_request(&mut stream);
+            first_seen_tx.send(()).unwrap();
+            finish_response_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+            let body = r#"{"text":"first"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            match listener.accept() {
+                Ok(_) => panic!("second Azure chunk must not be uploaded after cancellation"),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(err) => panic!("accept second Azure request failed: {err}"),
+            }
+        });
+        let asr = Arc::new(azure_asr_for_url(base_url, Some(1_000)));
+        asr.consume_pcm_chunk(&vec![0u8; 64_000]);
+        let run = tokio::spawn({
+            let asr = Arc::clone(&asr);
+            async move { asr.transcribe().await }
+        });
+
+        tokio::task::spawn_blocking(move || first_seen_rx.recv_timeout(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
+        asr.cancel();
+        finish_response_tx.send(()).unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(3), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("cancelled"));
+        server.join().unwrap();
+    }
+
+    type RequestAssertion = Box<dyn Fn(&[u8]) + Send + 'static>;
+
+    struct AzureFixtureResponse {
+        status: u16,
+        content_type: &'static str,
+        body: &'static str,
+        assert_request: Option<RequestAssertion>,
+    }
+
+    impl AzureFixtureResponse {
+        fn ok(body: &'static str, assert_request: Option<RequestAssertion>) -> Self {
+            Self {
+                status: 200,
+                content_type: "application/json",
+                body,
+                assert_request,
+            }
+        }
+    }
+
+    fn azure_asr_for_url(base_url: String, max_chunk_duration_ms: Option<u64>) -> WhisperBatchASR {
+        WhisperBatchASR::new(
+            "azure-secret".to_string(),
+            base_url,
+            "fixture-deployment".to_string(),
+            None,
+            max_chunk_duration_ms,
+            false,
+        )
+        .with_azure_openai()
+    }
+
+    fn azure_fixture_url(addr: std::net::SocketAddr) -> String {
+        format!(
+            "http://{addr}/openai/deployments/fixture-deployment/audio/transcriptions?api-version=2025-04-01-preview"
+        )
+    }
+
+    fn start_azure_test_server(
+        responses: Vec<AzureFixtureResponse>,
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for response in responses {
+                let mut stream = accept_test_connection(&listener);
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let request = read_http_request(&mut stream);
+                let request_text = String::from_utf8_lossy(&request);
+                let lower = request_text.to_ascii_lowercase();
+                assert!(request_text.starts_with(
+                    "POST /openai/deployments/fixture-deployment/audio/transcriptions?api-version=2025-04-01-preview HTTP/1.1"
+                ));
+                assert!(lower.contains("api-key: azure-secret"));
+                assert!(!lower.contains("authorization:"));
+                assert!(!request_text.contains(r#"name="model""#));
+                if let Some(assert_request) = response.assert_request {
+                    assert_request(&request);
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 {} Test\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.status,
+                    response.content_type,
+                    response.body.len(),
+                    response.body
+                )
+                .unwrap();
+            }
+        });
+        (azure_fixture_url(addr), server)
+    }
+
+    fn start_azure_raw_response_server(responses: Vec<String>) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for response in responses {
+                let mut stream = accept_test_connection(&listener);
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let request = read_http_request(&mut stream);
+                let request_text = String::from_utf8_lossy(&request);
+                let lower = request_text.to_ascii_lowercase();
+                assert!(request_text.starts_with(
+                    "POST /openai/deployments/fixture-deployment/audio/transcriptions?api-version=2025-04-01-preview HTTP/1.1"
+                ));
+                assert!(lower.contains("api-key: azure-secret"));
+                assert!(!lower.contains("authorization:"));
+                assert!(!request_text.contains(r#"name="model""#));
+                stream.write_all(response.as_bytes()).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        (azure_fixture_url(addr), server)
+    }
+
+    fn accept_test_connection(listener: &TcpListener) -> TcpStream {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for ASR test request"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept ASR test request failed: {err}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream
     }
 
     fn start_whisper_test_server(texts: Vec<&'static str>) -> (String, thread::JoinHandle<()>) {

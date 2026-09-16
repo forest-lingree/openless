@@ -32,6 +32,19 @@ assert(
   'Unknown formats must not silently fall back',
 );
 assert(
+  (
+    protocolValidationError as unknown as (
+      values: ProtocolValues,
+      defaultFormat: 'chat_completions',
+      formats: Array<'chat_completions' | 'responses'>,
+    ) => string | null
+  )({ ...values, 'ark.request_format': 'messages' }, 'chat_completions', [
+    'chat_completions',
+    'responses',
+  ]) === 'llmRequestFormatInvalid',
+  'Provider-specific protocol validation must reject stored formats outside descriptor support',
+);
+assert(
   protocolValidationError({ ...values, 'ark.max_tokens': '0' }, 'messages') ===
     'llmTokenLimitInvalid',
   'Zero output tokens must be rejected',

@@ -97,6 +97,7 @@ struct LegacyEntry {
     auth_mode: Option<String>,
     volcengine_api_key: Option<String>,
     vocabulary_id: Option<String>,
+    azure_api_version: Option<String>,
     advanced_config: Option<String>,
     xfyun_app_id: Option<String>,
     xfyun_api_key: Option<String>,
@@ -129,6 +130,7 @@ impl Default for LegacyEntry {
             auth_mode: None,
             volcengine_api_key: None,
             vocabulary_id: None,
+            azure_api_version: None,
             advanced_config: None,
             xfyun_app_id: None,
             xfyun_api_key: None,
@@ -159,6 +161,7 @@ impl LegacyEntry {
             &self.auth_mode,
             &self.volcengine_api_key,
             &self.vocabulary_id,
+            &self.azure_api_version,
             &self.advanced_config,
             &self.xfyun_app_id,
             &self.xfyun_api_key,
@@ -389,6 +392,7 @@ fn decode_entry(
             (VOLCENGINE_AUTH_MODE_ACCOUNT, entry.auth_mode),
             (VOLCENGINE_API_KEY_ACCOUNT, entry.volcengine_api_key),
             (ASR_VOCABULARY_ID_ACCOUNT, entry.vocabulary_id),
+            (ASR_AZURE_API_VERSION_ACCOUNT, entry.azure_api_version),
             (ASR_ADVANCED_CONFIG_ACCOUNT, entry.advanced_config),
             (XFYUN_APP_ID_ACCOUNT, entry.xfyun_app_id),
             (XFYUN_API_KEY_ACCOUNT, entry.xfyun_api_key),
@@ -451,6 +455,7 @@ pub fn read_legacy_accounts(
                 ASR_ENDPOINT_ACCOUNT,
                 ASR_MODEL_ACCOUNT,
                 ASR_VOCABULARY_ID_ACCOUNT,
+                ASR_AZURE_API_VERSION_ACCOUNT,
                 ASR_ADVANCED_CONFIG_ACCOUNT,
                 XFYUN_APP_ID_ACCOUNT,
                 XFYUN_API_KEY_ACCOUNT,
@@ -583,6 +588,14 @@ mod tests {
         );
         assert_eq!(
             secret(
+                CredentialNamespace::Asr,
+                Some("shared".into()),
+                ASR_AZURE_API_VERSION_ACCOUNT
+            ),
+            "2024-10-21"
+        );
+        assert_eq!(
+            secret(
                 CredentialNamespace::Llm,
                 Some("shared".into()),
                 LLM_EXTRA_HEADERS_ACCOUNT
@@ -597,10 +610,30 @@ mod tests {
             ),
             "0.2"
         );
-        assert_eq!(parsed.secrets.len(), 24);
+        assert_eq!(parsed.secrets.len(), 25);
         assert!(!serde_json::to_string(&parsed.metadata)
             .unwrap()
             .contains("fixture-"));
+    }
+
+    #[test]
+    fn azure_credentials_legacy_fixture_extracts_asr_api_version() {
+        let parsed = decode_legacy_credentials(LEGACY).unwrap();
+        let key = CredentialKey::new(
+            CredentialNamespace::Asr,
+            Some("shared".into()),
+            ASR_AZURE_API_VERSION_ACCOUNT,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed
+                .secrets
+                .iter()
+                .find(|(candidate, _)| candidate == &key)
+                .map(|(_, value)| value.expose_secret()),
+            Some("2024-10-21")
+        );
     }
 
     #[test]
@@ -632,7 +665,7 @@ mod tests {
                     .unwrap()
                     .secrets
                     .len(),
-                24
+                25
             );
         }
         assert!(

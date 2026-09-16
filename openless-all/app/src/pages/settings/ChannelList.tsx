@@ -66,6 +66,8 @@ interface PresetOption {
   defaultModel?: string;
   authRequirement?: ProviderDescriptor['authRequirement'];
   staticModels?: string[];
+  supportsModelListing?: ProviderDescriptor['supportsModelListing'];
+  supportsThinking?: ProviderDescriptor['supportsThinking'];
   defaultRequestFormat?: ProviderDescriptor['defaultRequestFormat'];
   supportedRequestFormats?: ProviderDescriptor['supportedRequestFormats'];
 }
@@ -87,6 +89,8 @@ export function presetsFor(
     defaultModel: descriptor.defaultModel ?? undefined,
     authRequirement: descriptor.authRequirement,
     staticModels: descriptor.staticModels,
+    supportsModelListing: descriptor.supportsModelListing,
+    supportsThinking: descriptor.supportsThinking,
     defaultRequestFormat: descriptor.defaultRequestFormat,
     supportedRequestFormats: descriptor.supportedRequestFormats,
   }));

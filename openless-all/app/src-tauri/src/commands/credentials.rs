@@ -563,6 +563,7 @@ fn credential_configuration(
         asr_api_key: configured(&snap.asr_api_key),
         asr_endpoint: configured(&snap.asr_endpoint),
         asr_model: configured(&snap.asr_model),
+        asr_azure_api_version: configured(&snap.asr_azure_api_version),
         volcengine_service: snap.volcengine_service.clone(),
         volcengine_auth_mode: snap.volcengine_auth_mode.clone(),
         volcengine_app_key: configured(&snap.volcengine_app_key),
@@ -837,6 +838,7 @@ fn account_provider_kind(account: CredentialAccount) -> CredentialProviderKind {
         | CredentialAccount::AsrEndpoint
         | CredentialAccount::AsrModel
         | CredentialAccount::AsrVocabularyId
+        | CredentialAccount::AsrAzureApiVersion
         | CredentialAccount::AsrAdvancedConfig
         | CredentialAccount::XfyunAppId
         | CredentialAccount::XfyunApiKey
@@ -872,6 +874,7 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "asr.endpoint" => Ok(CredentialAccount::AsrEndpoint),
         "asr.model" => Ok(CredentialAccount::AsrModel),
         "asr.vocabulary_id" => Ok(CredentialAccount::AsrVocabularyId),
+        "asr.azure_api_version" => Ok(CredentialAccount::AsrAzureApiVersion),
         "asr.advanced_config" => Ok(CredentialAccount::AsrAdvancedConfig),
         "xfyun.app_id" => Ok(CredentialAccount::XfyunAppId),
         "xfyun.api_key" => Ok(CredentialAccount::XfyunApiKey),
@@ -934,5 +937,41 @@ mod tests {
                 "Core LLM account must be accepted by the Tauri vault adapter: {account}"
             );
         }
+    }
+
+    #[test]
+    fn azure_asr_account_routes_to_asr_namespace_and_provider_scope() {
+        let key = credential_key("asr.azure_api_version", Some("channel-a".to_string())).unwrap();
+
+        assert_eq!(key.namespace, openless_core::CredentialNamespace::Asr);
+        assert_eq!(key.provider_id.as_deref(), Some("channel-a"));
+        assert_eq!(
+            account_provider_kind(parse_account("asr.azure_api_version").unwrap()),
+            CredentialProviderKind::Asr
+        );
+    }
+
+    #[test]
+    fn azure_asr_configuration_requires_api_version() {
+        let with_version: crate::persistence::CredentialsSnapshot =
+            serde_json::from_value(serde_json::json!({
+                "asrApiKey": "fixture-key",
+                "asrEndpoint": "https://azure.example/openai/deployments/whisper",
+                "asrModel": "whisper-1",
+                "asrAzureApiVersion": "2024-10-21",
+                "activeOmniProvider": "custom"
+            }))
+            .unwrap();
+        let without_version: crate::persistence::CredentialsSnapshot =
+            serde_json::from_value(serde_json::json!({
+                "asrApiKey": "fixture-key",
+                "asrEndpoint": "https://azure.example/openai/deployments/whisper",
+                "asrModel": "whisper-1",
+                "activeOmniProvider": "custom"
+            }))
+            .unwrap();
+
+        assert!(asr_configured_for_provider("azure-openai", &with_version));
+        assert!(!asr_configured_for_provider("azure-openai", &without_version));
     }
 }

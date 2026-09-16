@@ -329,6 +329,18 @@ impl ProviderService {
         }
         let resolved = self.resolve(request).await?;
         ensure_supported_kind(&resolved)?;
+        if provider_descriptor(resolved.kind, &resolved.provider_type)
+            .is_some_and(|descriptor| !descriptor.supports_model_listing)
+        {
+            return Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                if resolved.provider_type == crate::azure_openai::PROVIDER_ID {
+                    "azureManualDeployment"
+                } else {
+                    "provider model listing is not available"
+                },
+            ));
+        }
         if let Some(models) = static_models(&resolved) {
             if cancellation.is_cancelled() {
                 return Err(cancelled_request());
@@ -962,7 +974,8 @@ mod tests {
     use crate::testing::FakeProviderTransport;
     use std::io::{Read, Write};
 
-    fn spawn_http_response(
+    fn spawn_http_response_at(
+        endpoint_path: &'static str,
         status: &'static str,
         content_type: &'static str,
         body: &'static str,
@@ -1008,7 +1021,15 @@ mod tests {
             )
             .unwrap();
         });
-        (format!("http://{address}/v1"), request_rx)
+        (format!("http://{address}{endpoint_path}"), request_rx)
+    }
+
+    fn spawn_http_response(
+        status: &'static str,
+        content_type: &'static str,
+        body: &'static str,
+    ) -> (String, std::sync::mpsc::Receiver<Vec<u8>>) {
+        spawn_http_response_at("/v1", status, content_type, body)
     }
 
     async fn create_channel_with_values(
@@ -1457,6 +1478,251 @@ mod tests {
 
         assert_eq!(error.message, "providerHttpStatus:401");
         assert!(!format!("{error:?}").contains("response-secret"));
+    }
+
+    #[tokio::test]
+    async fn azure_llm_model_listing_reports_manual_deployment_without_transport_calls() {
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let channel = create_channel_with_values(
+            &credentials,
+            ChannelKind::Llm,
+            crate::azure_openai::PROVIDER_ID,
+            &[
+                (
+                    LLM_ENDPOINT_ACCOUNT,
+                    "https://example.openai.azure.com/openai/v1",
+                ),
+                (LLM_MODEL_ACCOUNT, "selected-deployment"),
+                (LLM_API_KEY_ACCOUNT, "fixture-key"),
+            ],
+        )
+        .await;
+        let transport = Arc::new(FakeProviderTransport::default());
+        let service = ProviderService::new_with_transport(
+            credentials,
+            Arc::new(crate::TokioTaskSpawner),
+            transport.clone(),
+        );
+
+        let error = service
+            .list_models(ProviderRequest {
+                thinking_enabled: false,
+                kind: ProviderKind::Llm,
+                channel_id: Some(channel),
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, BackendErrorCode::Unsupported);
+        assert_eq!(error.message, "azureManualDeployment");
+        assert!(transport.requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn azure_llm_validation_posts_chat_and_responses_with_api_key_and_deployment() {
+        for (format, response_body, expected_path) in [
+            (
+                "chat_completions",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
+                "/openai/v1/chat/completions",
+            ),
+            (
+                "responses",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n",
+                "/openai/v1/responses",
+            ),
+        ] {
+            let (endpoint, request) =
+                spawn_http_response_at("/openai/v1", "200 OK", "text/event-stream", response_body);
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Llm,
+                crate::azure_openai::PROVIDER_ID,
+                &[
+                    (LLM_ENDPOINT_ACCOUNT, endpoint.as_str()),
+                    (LLM_MODEL_ACCOUNT, "selected-deployment"),
+                    (LLM_API_KEY_ACCOUNT, "fixture-key"),
+                    (crate::llm_protocol::REQUEST_FORMAT_ACCOUNT, format),
+                ],
+            )
+            .await;
+            let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+
+            service
+                .validate(ProviderRequest {
+                    thinking_enabled: false,
+                    kind: ProviderKind::Llm,
+                    channel_id: Some(channel),
+                })
+                .await
+                .unwrap();
+
+            let request = String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap())
+                .unwrap();
+            assert!(
+                request.starts_with(&format!("POST {expected_path} ")),
+                "{format}: {request}"
+            );
+            let (headers, body) = request.split_once("\r\n\r\n").unwrap();
+            let headers = headers.to_ascii_lowercase();
+            assert!(headers.contains("api-key: fixture-key"), "{format}: {headers}");
+            assert!(!headers.contains("authorization:"), "{format}: {headers}");
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body["model"], "selected-deployment", "{format}: {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_asr_validation_posts_silence_wav_with_selected_deployment_version_and_api_key() {
+        let (endpoint, request) =
+            spawn_http_response_at("", "200 OK", "application/json", r#"{"text":"ok"}"#);
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let channel = create_channel_with_values(
+            &credentials,
+            ChannelKind::Asr,
+            crate::azure_openai::PROVIDER_ID,
+            &[
+                (ASR_ENDPOINT_ACCOUNT, endpoint.as_str()),
+                (ASR_MODEL_ACCOUNT, "selected-deployment"),
+                (ASR_API_KEY_ACCOUNT, "fixture-key"),
+                (
+                    crate::credentials::ASR_AZURE_API_VERSION_ACCOUNT,
+                    "2025-04-01-preview",
+                ),
+            ],
+        )
+        .await;
+        let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+
+        service
+            .validate(ProviderRequest {
+                thinking_enabled: false,
+                kind: ProviderKind::Asr,
+                channel_id: Some(channel),
+            })
+            .await
+            .unwrap();
+
+        let request = request.recv_timeout(Duration::from_secs(2)).unwrap();
+        let request_text = String::from_utf8_lossy(&request);
+        let lower = request_text.to_ascii_lowercase();
+        assert!(request_text.starts_with(
+            "POST /openai/deployments/selected-deployment/audio/transcriptions?api-version=2025-04-01-preview "
+        ));
+        assert!(lower.contains("api-key: fixture-key"));
+        assert!(!lower.contains("authorization:"));
+        assert!(!request_text.contains(r#"name="model""#));
+        assert!(request.windows(4).any(|chunk| chunk == b"RIFF"));
+        assert!(request.windows(4).any(|chunk| chunk == b"WAVE"));
+    }
+
+    #[tokio::test]
+    async fn azure_asr_validation_rejects_missing_or_invalid_api_version_before_network() {
+        for (version, expected_code, expected_message) in [
+            (
+                None,
+                BackendErrorCode::Provider,
+                "Azure OpenAI API version is not configured",
+            ),
+            (
+                Some("20241021"),
+                BackendErrorCode::InvalidArgument,
+                "azureApiVersionInvalid",
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let mut values = vec![
+                (ASR_ENDPOINT_ACCOUNT, endpoint.as_str()),
+                (ASR_MODEL_ACCOUNT, "selected-deployment"),
+                (ASR_API_KEY_ACCOUNT, "fixture-key"),
+            ];
+            if let Some(version) = version {
+                values.push((crate::credentials::ASR_AZURE_API_VERSION_ACCOUNT, version));
+            }
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Asr,
+                crate::azure_openai::PROVIDER_ID,
+                &values,
+            )
+            .await;
+            let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+
+            let error = service
+                .validate(ProviderRequest {
+                    thinking_enabled: false,
+                    kind: ProviderKind::Asr,
+                    channel_id: Some(channel),
+                })
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.code, expected_code);
+            assert_eq!(error.message, expected_message);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err(),
+                "{expected_message} must fail before opening the network"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_asr_validation_does_not_accept_http_or_malformed_failures_as_no_speech() {
+        for (status, content_type, body, expected) in [
+            (
+                "401 Unauthorized",
+                "application/json",
+                r#"{"error":{"message":"bad secret"}}"#,
+                "providerHttpStatus:401",
+            ),
+            (
+                "429 Too Many Requests",
+                "text/plain",
+                "slow down",
+                "providerHttpStatus:429",
+            ),
+            (
+                "200 OK",
+                "application/json",
+                r#"{"text":123}"#,
+                "provider validation failed",
+            ),
+        ] {
+            let (endpoint, _request) = spawn_http_response_at("", status, content_type, body);
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Asr,
+                crate::azure_openai::PROVIDER_ID,
+                &[
+                    (ASR_ENDPOINT_ACCOUNT, endpoint.as_str()),
+                    (ASR_MODEL_ACCOUNT, "selected-deployment"),
+                    (ASR_API_KEY_ACCOUNT, "fixture-key"),
+                    (
+                        crate::credentials::ASR_AZURE_API_VERSION_ACCOUNT,
+                        "2025-04-01-preview",
+                    ),
+                ],
+            )
+            .await;
+            let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+
+            let error = service
+                .validate(ProviderRequest {
+                    thinking_enabled: false,
+                    kind: ProviderKind::Asr,
+                    channel_id: Some(channel),
+                })
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.message, expected, "{status} {body}");
+        }
     }
 
     #[tokio::test]

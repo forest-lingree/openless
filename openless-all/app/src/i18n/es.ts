@@ -1287,6 +1287,7 @@ export const es: typeof zhCN = {
         customResponses: 'Personalizado · Responses',
         customMessages: 'Personalizado · Messages',
         ark: 'ARK (Volcengine Ark)',
+        azureOpenai: 'Azure OpenAI',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
         atlascloud: 'Atlas Cloud',
@@ -1397,6 +1398,18 @@ export const es: typeof zhCN = {
       apiKeyOptionalLabel: 'Clave API (opcional)',
       baseUrlLabel: 'URL base',
       modelLabel: 'Modelo',
+      azureDeploymentLabel: 'Nombre de implementación',
+      azureDeploymentHint:
+        'Introduce el nombre de implementación de Azure; puede ser distinto del nombre del modelo.',
+      azureApiVersionLabel: 'Versión de API de Azure',
+      azureApiVersionHint:
+        'Obligatoria para transcripción. Usa una versión de API compatible con tu implementación.',
+      azureManualDeployment:
+        'Introduce manualmente un nombre de implementación de Azure; la detección de modelos no está disponible.',
+      azureThinkingHint:
+        'Azure usa los valores predeterminados de la implementación para los ajustes de razonamiento del modelo.',
+      azureTranscriptionHint:
+        'El audio se transcribe cuando se detiene la grabación. Esto es Azure OpenAI, no Azure AI Speech.',
       customModelLabel: 'Modelo personalizado…',
       presetListLabel: 'Volver a los preajustes',
       temperatureLabel: 'Temperatura',
@@ -1425,6 +1438,15 @@ export const es: typeof zhCN = {
         'La respuesta no se completó o alcanzó el límite de salida. Se conserva el texto ya mostrado.',
       llmProtocolHeaderConflict:
         'Messages establece automáticamente las cabeceras de autenticación y versión. Elimina x-api-key y anthropic-version de las cabeceras adicionales.',
+      azureApiVersionRequired: 'La versión de API de Azure es obligatoria.',
+      azureApiVersionInvalid:
+        'La versión de API de Azure debe usar el formato YYYY-MM-DD o YYYY-MM-DD-preview.',
+      azureDeploymentRequired: 'El nombre de implementación de Azure es obligatorio.',
+      azureEndpointInvalid:
+        'El endpoint de Azure debe ser la raíz del recurso, por ejemplo https://your-resource.openai.azure.com.',
+      azureEndpointConflict:
+        'El endpoint de Azure ya contiene una implementación. Introduce por separado la raíz del recurso y el nombre de implementación.',
+      azureUnsupportedProtocol: 'Azure OpenAI solo admite Chat Completions y Responses.',
       llmStreamError:
         'El servidor devolvió un error de transmisión. Comprueba el modelo y los parámetros de la solicitud.',
       saveProtocol: 'Guardar ajustes del protocolo',

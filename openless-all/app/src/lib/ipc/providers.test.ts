@@ -36,6 +36,38 @@ assert(
   'Agent Maestro must not appear in Omni descriptors',
 );
 
+const azurePreviewLlm = generated.llm.find(
+  (descriptor) => descriptor.providerType === 'azure-openai',
+);
+const azurePreviewAsr = generated.asr.find(
+  (descriptor) => descriptor.providerType === 'azure-openai',
+);
+const azureLlm = (await listProviderDescriptors('llm')).find(
+  (descriptor) => descriptor.providerType === 'azure-openai',
+);
+const azureAsr = (await listProviderDescriptors('asr')).find(
+  (descriptor) => descriptor.providerType === 'azure-openai',
+);
+if (
+  !azurePreviewLlm ||
+  !azurePreviewAsr ||
+  !azureLlm ||
+  !azureAsr ||
+  azurePreviewLlm.defaultEndpoint !== null ||
+  azurePreviewLlm.defaultModel !== null ||
+  azurePreviewAsr.defaultEndpoint !== null ||
+  azurePreviewAsr.defaultModel !== null ||
+  azureLlm.defaultEndpoint !== null ||
+  azureLlm.defaultModel !== null ||
+  (azureLlm as { supportsModelListing?: boolean }).supportsModelListing !== false ||
+  (azureLlm as { supportsThinking?: boolean }).supportsThinking !== false ||
+  (azureAsr as { supportsModelListing?: boolean }).supportsModelListing !== false
+) {
+  throw new Error(
+    'Azure preview descriptors must expose no defaults and opt out of discovery/thinking',
+  );
+}
+
 for (const kind of ['asr', 'llm', 'omni'] as ProviderKind[]) {
   const descriptors = await listProviderDescriptors(kind);
   if (!descriptors.length)

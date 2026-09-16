@@ -11,7 +11,23 @@
       "providerType": "volcengine",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence_allows_no_final"
+    },
+    {
+      "authRequirement": "api_key",
+      "defaultEndpoint": null,
+      "defaultModel": null,
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "azureOpenai",
+      "providerType": "azure-openai",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "supportsModelListing": false,
+      "supportsThinking": false,
+      "validationProbe": "asr_silence"
     },
     {
       "authRequirement": "api_key",
@@ -25,6 +41,8 @@
         "scribe_v2"
       ],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -52,6 +70,8 @@
         "paraformer-v2"
       ],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -68,6 +88,8 @@
         "qwen3-asr-flash-realtime-2025-10-27"
       ],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -83,6 +105,8 @@
         "fun-asr-flash-2026-06-15"
       ],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_non_silent"
     },
     {
@@ -95,6 +119,8 @@
       "providerType": "siliconflow",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -107,6 +133,8 @@
       "providerType": "stepfun",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "stepfun_no_speech"
     },
     {
@@ -119,6 +147,8 @@
       "providerType": "zhipu",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -131,6 +161,8 @@
       "providerType": "groq",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -143,6 +175,8 @@
       "providerType": "whisper",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -155,6 +189,8 @@
       "providerType": "openrouter",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -167,6 +203,8 @@
       "providerType": "orcarouter",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -179,6 +217,8 @@
       "providerType": "zenmux",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -191,6 +231,8 @@
       "providerType": "openai-compatible",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -205,6 +247,8 @@
         "mimo-v2.5-asr"
       ],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence"
     },
     {
@@ -217,6 +261,8 @@
       "providerType": "iflytek",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence_allows_no_final"
     },
     {
@@ -229,6 +275,8 @@
       "providerType": "tencent-cloud",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_silence_allows_no_final"
     },
     {
@@ -241,6 +289,8 @@
       "providerType": "foundry-local-whisper",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "unsupported"
     },
     {
@@ -253,6 +303,8 @@
       "providerType": "local-whisper",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "unsupported"
     },
     {
@@ -265,6 +317,8 @@
       "providerType": "sherpa-onnx-local",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "unsupported"
     },
     {
@@ -277,6 +331,8 @@
       "providerType": "local-qwen3-mlx",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "unsupported"
     },
     {
@@ -289,6 +345,8 @@
       "providerType": "local-qwen3-c",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "unsupported"
     },
     {
@@ -301,6 +359,8 @@
       "providerType": "local-qwen3",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "unsupported"
     },
     {
@@ -313,6 +373,8 @@
       "providerType": "apple-speech",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "asr_native_silence"
     }
   ],
@@ -343,6 +405,25 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
+      "validationProbe": "llm_text"
+    },
+    {
+      "authRequirement": "api_key",
+      "defaultEndpoint": null,
+      "defaultModel": null,
+      "defaultRequestFormat": "chat_completions",
+      "kind": "llm",
+      "labelKey": "azureOpenai",
+      "providerType": "azure-openai",
+      "staticModels": [],
+      "supportedRequestFormats": [
+        "chat_completions",
+        "responses"
+      ],
+      "supportsModelListing": false,
+      "supportsThinking": false,
       "validationProbe": "llm_text"
     },
     {
@@ -359,6 +440,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -375,6 +458,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -391,6 +476,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -407,6 +494,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -419,6 +508,8 @@
       "providerType": "gemini",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -436,6 +527,8 @@
         "gpt-5.5"
       ],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -452,6 +545,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -468,6 +563,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -484,6 +581,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -500,6 +599,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -516,6 +617,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -532,6 +635,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -548,6 +653,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -564,6 +671,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -580,6 +689,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -592,6 +703,8 @@
       "providerType": "tencentTokenHub",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -604,6 +717,8 @@
       "providerType": "lmstudio",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -616,6 +731,8 @@
       "providerType": "agent-maestro",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -632,6 +749,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -648,6 +767,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     },
     {
@@ -664,6 +785,8 @@
         "responses",
         "messages"
       ],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "llm_text"
     }
   ],
@@ -678,6 +801,8 @@
       "providerType": "openai",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "omni_text"
     },
     {
@@ -690,6 +815,8 @@
       "providerType": "gemini",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "omni_text"
     },
     {
@@ -702,6 +829,8 @@
       "providerType": "dashscope-omni",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "omni_text"
     },
     {
@@ -714,6 +843,8 @@
       "providerType": "custom",
       "staticModels": [],
       "supportedRequestFormats": [],
+      "supportsModelListing": true,
+      "supportsThinking": true,
       "validationProbe": "omni_text"
     }
   ]

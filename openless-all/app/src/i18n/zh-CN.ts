@@ -1194,6 +1194,7 @@ export const zhCN = {
         '两种模式使用完全独立的凭据配置。切换模式不会删除另一套配置，只是暂时停用；切回即恢复。',
       presets: {
         ark: 'ARK（火山方舟）',
+        azureOpenai: 'Azure OpenAI',
         deepseek: 'DeepSeek',
         siliconflow: '硅基流动',
         atlascloud: 'Atlas Cloud',
@@ -1305,6 +1306,14 @@ export const zhCN = {
       apiKeyOptionalLabel: 'API 密钥（可选）',
       baseUrlLabel: '接口地址',
       modelLabel: '模型',
+      azureDeploymentLabel: '部署名称',
+      azureDeploymentHint: '请输入 Azure 部署名称；它不一定等同于模型名称。',
+      azureApiVersionLabel: 'Azure API 版本',
+      azureApiVersionHint: '转写必填。请使用该部署支持的 API 版本。',
+      azureManualDeployment: '请手动输入 Azure 部署名称；此供应商不支持模型发现。',
+      azureThinkingHint: 'Azure 会使用部署自身默认的模型推理设置。',
+      azureTranscriptionHint:
+        '录音停止后才会上传音频并转写。这里使用 Azure OpenAI，不是 Azure AI Speech。',
       customModelLabel: '自定义模型…',
       presetListLabel: '返回预设列表',
       searchModels: '搜索模型…',
@@ -1336,6 +1345,13 @@ export const zhCN = {
       llmResponseIncomplete: '响应未完整结束或达到输出上限；已输出正文会保留。',
       llmProtocolHeaderConflict:
         'Messages 已自动设置鉴权和版本请求头，请移除额外 Headers 中的 x-api-key 和 anthropic-version。',
+      azureApiVersionRequired: '必须填写 Azure API 版本。',
+      azureApiVersionInvalid: 'Azure API 版本必须使用 YYYY-MM-DD 或 YYYY-MM-DD-preview 格式。',
+      azureDeploymentRequired: '必须填写 Azure 部署名称。',
+      azureEndpointInvalid:
+        'Azure Endpoint 必须是资源根地址，例如 https://your-resource.openai.azure.com。',
+      azureEndpointConflict: 'Azure Endpoint 已包含部署名称。请分别填写资源根地址和部署名称。',
+      azureUnsupportedProtocol: 'Azure OpenAI 仅支持 Chat Completions 和 Responses。',
       llmStreamError: '服务端返回流式错误，请检查模型和请求参数。',
       saveProtocol: '保存协议设置',
       thinkingModeHint:

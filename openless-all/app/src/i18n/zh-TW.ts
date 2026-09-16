@@ -1198,6 +1198,7 @@ export const zhTW: typeof zhCN = {
         lmstudio: 'LM Studio',
         agentMaestro: 'Agent Maestro',
         ark: 'ARK（火山方舟）',
+        azureOpenai: 'Azure OpenAI',
         deepseek: 'DeepSeek',
         siliconflow: '硅基流動',
         atlascloud: 'Atlas Cloud',
@@ -1307,6 +1308,14 @@ export const zhTW: typeof zhCN = {
       apiKeyOptionalLabel: 'API 密鑰（選填）',
       baseUrlLabel: '接口地址',
       modelLabel: '模型',
+      azureDeploymentLabel: '部署名稱',
+      azureDeploymentHint: '請輸入 Azure 部署名稱；它不一定等同於模型名稱。',
+      azureApiVersionLabel: 'Azure API 版本',
+      azureApiVersionHint: '轉寫必填。請使用該部署支援的 API 版本。',
+      azureManualDeployment: '請手動輸入 Azure 部署名稱；此供應商不支援模型發現。',
+      azureThinkingHint: 'Azure 會使用部署本身預設的模型推理設定。',
+      azureTranscriptionHint:
+        '錄音停止後才會上傳音訊並轉寫。這裡使用 Azure OpenAI，不是 Azure AI Speech。',
       customModelLabel: '自訂模型…',
       presetListLabel: '返回預設清單',
       searchModels: '搜尋模型…',
@@ -1338,6 +1347,13 @@ export const zhTW: typeof zhCN = {
       llmResponseIncomplete: '回應未完整結束或達到輸出上限；已輸出正文會保留。',
       llmProtocolHeaderConflict:
         'Messages 已自動設定驗證與版本標頭，請移除額外 Headers 中的 x-api-key 與 anthropic-version。',
+      azureApiVersionRequired: '必須填寫 Azure API 版本。',
+      azureApiVersionInvalid: 'Azure API 版本必須使用 YYYY-MM-DD 或 YYYY-MM-DD-preview 格式。',
+      azureDeploymentRequired: '必須填寫 Azure 部署名稱。',
+      azureEndpointInvalid:
+        'Azure Endpoint 必須是資源根位址，例如 https://your-resource.openai.azure.com。',
+      azureEndpointConflict: 'Azure Endpoint 已包含部署名稱。請分別填寫資源根位址和部署名稱。',
+      azureUnsupportedProtocol: 'Azure OpenAI 僅支援 Chat Completions 和 Responses。',
       llmStreamError: '伺服器回傳串流錯誤，請檢查模型和請求參數。',
       saveProtocol: '儲存協定設定',
       thinkingModeHint:
