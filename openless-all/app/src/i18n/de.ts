@@ -1294,6 +1294,7 @@ export const de: typeof zhCN = {
         customResponses: 'Benutzerdefiniert · Responses',
         customMessages: 'Benutzerdefiniert · Messages',
         ark: 'ARK (Volcengine Ark)',
+        azureOpenai: 'Azure OpenAI',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
         atlascloud: 'Atlas Cloud',
@@ -1403,6 +1404,18 @@ export const de: typeof zhCN = {
       apiKeyOptionalLabel: 'API-Schlüssel (optional)',
       baseUrlLabel: 'Basis-URL',
       modelLabel: 'Modell',
+      azureDeploymentLabel: 'Bereitstellungsname',
+      azureDeploymentHint:
+        'Gib den Azure-Bereitstellungsnamen ein; er kann vom Modellnamen abweichen.',
+      azureApiVersionLabel: 'Azure-API-Version',
+      azureApiVersionHint:
+        'Für Transkription erforderlich. Verwende eine API-Version, die deine Bereitstellung unterstützt.',
+      azureManualDeployment:
+        'Gib einen Azure-Bereitstellungsnamen manuell ein; Modellerkennung ist nicht verfügbar.',
+      azureThinkingHint:
+        'Azure verwendet die Bereitstellungsstandardwerte für modellspezifische Reasoning-Einstellungen.',
+      azureTranscriptionHint:
+        'Audio wird transkribiert, nachdem die Aufnahme stoppt. Dies ist Azure OpenAI, nicht Azure AI Speech.',
       customModelLabel: 'Eigenes Modell…',
       presetListLabel: 'Zurück zu den Vorlagen',
       temperatureLabel: 'Temperatur',
@@ -1431,6 +1444,15 @@ export const de: typeof zhCN = {
         'Die Antwort ist unvollständig oder hat die Ausgabegrenze erreicht. Bereits ausgegebener Text bleibt erhalten.',
       llmProtocolHeaderConflict:
         'Messages setzt die Authentifizierungs- und Versionsheader automatisch. Entferne x-api-key und anthropic-version aus den zusätzlichen Headern.',
+      azureApiVersionRequired: 'Die Azure-API-Version ist erforderlich.',
+      azureApiVersionInvalid:
+        'Die Azure-API-Version muss das Format YYYY-MM-DD oder YYYY-MM-DD-preview verwenden.',
+      azureDeploymentRequired: 'Der Azure-Bereitstellungsname ist erforderlich.',
+      azureEndpointInvalid:
+        'Der Azure-Endpoint muss die Ressourcenwurzel sein, z. B. https://your-resource.openai.azure.com.',
+      azureEndpointConflict:
+        'Der Azure-Endpoint enthält bereits eine Bereitstellung. Gib Ressourcenwurzel und Bereitstellungsname getrennt ein.',
+      azureUnsupportedProtocol: 'Azure OpenAI unterstützt nur Chat Completions und Responses.',
       llmStreamError:
         'Der Server hat einen Streamfehler gemeldet. Prüfe das Modell und die Anfrageparameter.',
       saveProtocol: 'Protokolleinstellungen speichern',

@@ -3,12 +3,13 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 use openless_core::credentials::{
-    ASR_API_KEY_ACCOUNT, ASR_ENDPOINT_ACCOUNT, ASR_MODEL_ACCOUNT, LLM_API_KEY_ACCOUNT,
-    LLM_ENDPOINT_ACCOUNT, LLM_MODEL_ACCOUNT, OMNI_API_KEY_ACCOUNT, OMNI_ENDPOINT_ACCOUNT,
-    OMNI_MODEL_ACCOUNT, TENCENT_CLOUD_APP_ID_ACCOUNT, TENCENT_CLOUD_SECRET_ID_ACCOUNT,
-    TENCENT_CLOUD_SECRET_KEY_ACCOUNT, VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT,
-    VOLCENGINE_APP_KEY_ACCOUNT, VOLCENGINE_AUTH_MODE_ACCOUNT, VOLCENGINE_RESOURCE_ID_ACCOUNT,
-    XFYUN_API_KEY_ACCOUNT, XFYUN_APP_ID_ACCOUNT,
+    ASR_API_KEY_ACCOUNT, ASR_AZURE_API_VERSION_ACCOUNT, ASR_ENDPOINT_ACCOUNT, ASR_MODEL_ACCOUNT,
+    LLM_API_KEY_ACCOUNT, LLM_ENDPOINT_ACCOUNT, LLM_MODEL_ACCOUNT, OMNI_API_KEY_ACCOUNT,
+    OMNI_ENDPOINT_ACCOUNT, OMNI_MODEL_ACCOUNT, TENCENT_CLOUD_APP_ID_ACCOUNT,
+    TENCENT_CLOUD_SECRET_ID_ACCOUNT, TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
+    VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT, VOLCENGINE_APP_KEY_ACCOUNT,
+    VOLCENGINE_AUTH_MODE_ACCOUNT, VOLCENGINE_RESOURCE_ID_ACCOUNT, XFYUN_API_KEY_ACCOUNT,
+    XFYUN_APP_ID_ACCOUNT,
 };
 #[cfg(any(target_os = "linux", test))]
 use openless_core::credentials_legacy::LegacyCredentials;
@@ -387,6 +388,11 @@ impl CredentialStore for LinuxCredentialStore {
                     CredentialNamespace::Asr,
                     &active_asr_provider,
                     ASR_MODEL_ACCOUNT,
+                ),
+                asr_azure_api_version: has(
+                    CredentialNamespace::Asr,
+                    &active_asr_provider,
+                    ASR_AZURE_API_VERSION_ACCOUNT,
                 ),
                 volcengine_service,
                 volcengine_auth_mode,
@@ -835,12 +841,16 @@ mod tests {
         LinuxCredentialStore::open(&root).unwrap()
     }
 
-    fn create_channel(store: &LinuxCredentialStore, kind: ChannelKind) -> String {
+    fn create_channel_with_provider_type(
+        store: &LinuxCredentialStore,
+        kind: ChannelKind,
+        provider_type: &str,
+    ) -> String {
         let ChannelMutationResult::Created(id) = store
             .mutate_channel_with(
                 ChannelMutation::Create {
                     kind,
-                    provider_type: "openai-compatible".into(),
+                    provider_type: provider_type.into(),
                     name: String::new(),
                 },
                 |_| panic!("creation must not delete secrets"),
@@ -850,6 +860,10 @@ mod tests {
             panic!("expected channel creation");
         };
         id
+    }
+
+    fn create_channel(store: &LinuxCredentialStore, kind: ChannelKind) -> String {
+        create_channel_with_provider_type(store, kind, "openai-compatible")
     }
 
     #[test]
@@ -1002,6 +1016,45 @@ mod tests {
     const LEGACY: &str =
         include_str!("../../crates/openless-core/tests/fixtures/credentials-legacy-v2.json");
 
+    #[tokio::test]
+    async fn azure_linux_status_requires_asr_api_version() {
+        use openless_core::credentials::ASR_AZURE_API_VERSION_ACCOUNT;
+
+        let store = temporary_store();
+        let channel = create_channel_with_provider_type(&store, ChannelKind::Asr, "azure-openai");
+        store
+            .set_active_provider(ProviderSlot::Asr, channel.clone())
+            .await
+            .unwrap();
+
+        let make_key = |account| {
+            CredentialKey::new(CredentialNamespace::Asr, Some(channel.clone()), account).unwrap()
+        };
+        store
+            .update_metadata(|state| {
+                state.keys = vec![
+                    make_key(ASR_API_KEY_ACCOUNT),
+                    make_key(ASR_ENDPOINT_ACCOUNT),
+                    make_key(ASR_MODEL_ACCOUNT),
+                ];
+                Ok(())
+            })
+            .unwrap();
+
+        let preferences = UserPreferences::default();
+        assert!(!store.status(preferences.clone()).await.unwrap().asr_configured);
+
+        store
+            .update_metadata(|state| {
+                state.keys.push(make_key(ASR_AZURE_API_VERSION_ACCOUNT));
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(store.status(preferences).await.unwrap().asr_configured);
+        let _ = std::fs::remove_dir_all(store.metadata_path.parent().unwrap());
+    }
+
     #[test]
     fn legacy_migration_without_host_home_never_reads_credential_sources() {
         let store = temporary_store();
@@ -1071,7 +1124,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(std::fs::read_to_string(&legacy_path).unwrap(), LEGACY);
-        assert_eq!(store.state.lock().unwrap().keys.len(), 24);
+        assert_eq!(store.state.lock().unwrap().keys.len(), 25);
         let _ = std::fs::remove_dir_all(store.metadata_path.parent().unwrap());
     }
 
@@ -1149,8 +1202,8 @@ mod tests {
             .borrow()
             .keys()
             .all(|key| key.namespace != CredentialNamespace::Llm));
-        assert_eq!(vault.borrow().len(), 19);
-        assert_eq!(writes, 18);
+        assert_eq!(vault.borrow().len(), 20);
+        assert_eq!(writes, 19);
         let reopened = LinuxCredentialStore::open(store.metadata_path.parent().unwrap()).unwrap();
         let state = reopened.state.lock().unwrap();
         assert!(state.legacy_migrated);
@@ -1198,7 +1251,7 @@ mod tests {
                 }
             )
             .is_err());
-        assert_eq!(vault.borrow().len(), 24);
+        assert_eq!(vault.borrow().len(), 25);
         assert!(!store.state.lock().unwrap().legacy_migrated);
         std::fs::remove_dir(&store.metadata_path).unwrap();
         store
@@ -1206,7 +1259,7 @@ mod tests {
                 panic!("retry must preserve previously written secrets")
             })
             .unwrap();
-        assert_eq!(store.state.lock().unwrap().keys.len(), 24);
+        assert_eq!(store.state.lock().unwrap().keys.len(), 25);
         assert!(store.state.lock().unwrap().legacy_migrated);
         let _ = std::fs::remove_dir_all(store.metadata_path.parent().unwrap());
     }

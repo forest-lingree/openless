@@ -22,14 +22,19 @@ const emptyValues: ProtocolValues = {
   'ark.max_tokens': '',
   'ark.thinking_budget': '',
 };
+const allRequestFormats: LlmRequestFormat[] = ['chat_completions', 'responses', 'messages'];
 
 /** 界面即时提示；Core 仍对实际存储和发出的请求做同样的校验。 */
 export function protocolValidationError(
   values: ProtocolValues,
   defaultFormat: LlmRequestFormat,
+  formats: LlmRequestFormat[] = allRequestFormats,
 ): string | null {
   const format = values['ark.request_format'] || defaultFormat;
-  if (!['chat_completions', 'responses', 'messages'].includes(format))
+  if (
+    !allRequestFormats.includes(format as LlmRequestFormat) ||
+    !formats.includes(format as LlmRequestFormat)
+  )
     return 'llmRequestFormatInvalid';
   const mode = values['ark.messages_thinking'] || 'adaptive';
   if (!['adaptive', 'budget'].includes(mode)) return 'llmThinkingModeInvalid';
@@ -53,6 +58,7 @@ export function LlmProtocolFields({
   channelId,
   defaultFormat,
   formats,
+  supportsThinking = true,
   onUserMutation,
   onBlockedChange,
   onSaved,
@@ -60,6 +66,7 @@ export function LlmProtocolFields({
   channelId: string;
   defaultFormat: LlmRequestFormat;
   formats: LlmRequestFormat[];
+  supportsThinking?: boolean;
   onUserMutation: () => void;
   onBlockedChange: (account: string, blocked: boolean) => void;
   onSaved?: (changedAccounts?: string[]) => void;
@@ -76,7 +83,7 @@ export function LlmProtocolFields({
   const pendingWrite = useRef<Promise<boolean>>(Promise.resolve(true));
   const flushRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
   const dirty = accounts.some((account) => values[account] !== saved[account]);
-  const validation = protocolValidationError(values, defaultFormat);
+  const validation = protocolValidationError(values, defaultFormat, formats);
 
   useEffect(() => {
     mounted.current = true;
@@ -109,7 +116,8 @@ export function LlmProtocolFields({
 
   const save = (next: ProtocolValues): Promise<boolean> => {
     if (writing.current) return pendingWrite.current;
-    if (!loaded || protocolValidationError(next, defaultFormat)) return Promise.resolve(false);
+    if (!loaded || protocolValidationError(next, defaultFormat, formats))
+      return Promise.resolve(false);
     writing.current = true;
     setSaving(true);
     setError(null);
@@ -187,12 +195,12 @@ export function LlmProtocolFields({
           onChange={(value) => change('ark.request_format', value, true)}
         />
       </SettingRow>
-      {format === 'responses' && (
+      {format === 'responses' && supportsThinking && (
         <p style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>
           {t('settings.providers.responsesThinkingHint')}
         </p>
       )}
-      {format === 'messages' && (
+      {format === 'messages' && supportsThinking && (
         <>
           <SettingRow label={t('settings.providers.messagesThinkingLabel')}>
             <SelectLite

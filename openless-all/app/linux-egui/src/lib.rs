@@ -13,6 +13,7 @@ mod fcitx5;
 mod host_actions;
 mod hotkeys;
 mod marketplace;
+mod provider_editor;
 mod qa;
 mod remote_input;
 mod resources;
@@ -34,6 +35,11 @@ pub use fcitx5::{
 };
 pub use host_actions::LinuxHostActions;
 pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
+pub use provider_editor::{
+    azure_api_version_validation_error, load_azure_request_format_state, model_listing_action,
+    request_format_account_value, request_format_label, validate_azure_editor_state,
+    AzureRequestFormatState, ModelListingAction,
+};
 pub use resources::{
     LinuxPackageKind, LinuxResourceLayout, LinuxResourceResolver, FCITX_PLUGIN_CONFIG,
     FCITX_PLUGIN_LIBRARY,

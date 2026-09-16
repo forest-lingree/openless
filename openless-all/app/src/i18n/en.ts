@@ -1255,6 +1255,7 @@ export const en: typeof zhCN = {
         'The two modes keep fully separate credentials. Switching modes keeps the other set stored but unused; switching back restores it.',
       presets: {
         ark: 'ARK (Volcengine Ark)',
+        azureOpenai: 'Azure OpenAI',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
         atlascloud: 'Atlas Cloud',
@@ -1368,6 +1369,17 @@ export const en: typeof zhCN = {
       apiKeyOptionalLabel: 'API Key (optional)',
       baseUrlLabel: 'Base URL',
       modelLabel: 'Model',
+      azureDeploymentLabel: 'Deployment name',
+      azureDeploymentHint:
+        'Enter your Azure deployment name, which may differ from the model name.',
+      azureApiVersionLabel: 'Azure API version',
+      azureApiVersionHint:
+        'Required for transcription. Use an API version supported by your deployment.',
+      azureManualDeployment:
+        'Enter an Azure deployment name manually; model discovery is not available.',
+      azureThinkingHint: 'Azure uses deployment defaults for model-specific reasoning settings.',
+      azureTranscriptionHint:
+        'Audio is transcribed after recording stops. This is Azure OpenAI, not Azure AI Speech.',
       customModelLabel: 'Custom model\u2026',
       presetListLabel: 'Back to presets',
       searchModels: 'Search models…',
@@ -1402,6 +1414,14 @@ export const en: typeof zhCN = {
         'The response was incomplete or reached its output limit. Already emitted text is retained.',
       llmProtocolHeaderConflict:
         'Messages sets authentication and version headers automatically. Remove x-api-key and anthropic-version from extra headers.',
+      azureApiVersionRequired: 'Azure API version is required.',
+      azureApiVersionInvalid: 'Azure API version must use YYYY-MM-DD or YYYY-MM-DD-preview format.',
+      azureDeploymentRequired: 'Azure deployment name is required.',
+      azureEndpointInvalid:
+        'Azure endpoint must be a resource root such as https://your-resource.openai.azure.com.',
+      azureEndpointConflict:
+        'Azure endpoint already contains a deployment. Enter the resource root and the deployment name separately.',
+      azureUnsupportedProtocol: 'Azure OpenAI supports only Chat Completions and Responses.',
       llmStreamError: 'The server returned a stream error. Check the model and request parameters.',
       saveProtocol: 'Save protocol settings',
       thinkingModeHint:

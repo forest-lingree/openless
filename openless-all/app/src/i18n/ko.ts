@@ -1235,6 +1235,7 @@ export const ko: typeof zhCN = {
       presets: {
         lmstudio: 'LM Studio',
         ark: 'ARK (Volcengine Ark)',
+        azureOpenai: 'Azure OpenAI',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
         atlascloud: 'Atlas Cloud',
@@ -1346,6 +1347,15 @@ export const ko: typeof zhCN = {
       apiKeyOptionalLabel: 'API 키 (선택 사항)',
       baseUrlLabel: '엔드포인트',
       modelLabel: '모델',
+      azureDeploymentLabel: '배포 이름',
+      azureDeploymentHint: 'Azure 배포 이름을 입력하세요. 모델 이름과 다를 수 있습니다.',
+      azureApiVersionLabel: 'Azure API 버전',
+      azureApiVersionHint: '전사에 필요합니다. 해당 배포가 지원하는 API 버전을 사용하세요.',
+      azureManualDeployment:
+        'Azure 배포 이름을 수동으로 입력하세요. 모델 검색은 사용할 수 없습니다.',
+      azureThinkingHint: 'Azure는 배포에 설정된 모델 추론 기본값을 사용합니다.',
+      azureTranscriptionHint:
+        '녹음이 멈춘 뒤 오디오가 전사됩니다. 이는 Azure OpenAI이며 Azure AI Speech가 아닙니다.',
       customModelLabel: '사용자 정의 모델…',
       presetListLabel: '프리셋으로 돌아가기',
       searchModels: '모델 검색…',
@@ -1380,6 +1390,15 @@ export const ko: typeof zhCN = {
         '응답이 완료되지 않았거나 출력 한도에 도달했습니다. 이미 출력된 텍스트는 유지됩니다.',
       llmProtocolHeaderConflict:
         'Messages 인증 및 버전 헤더는 자동 설정됩니다. 추가 헤더에서 x-api-key와 anthropic-version을 제거하세요.',
+      azureApiVersionRequired: 'Azure API 버전이 필요합니다.',
+      azureApiVersionInvalid:
+        'Azure API 버전은 YYYY-MM-DD 또는 YYYY-MM-DD-preview 형식이어야 합니다.',
+      azureDeploymentRequired: 'Azure 배포 이름이 필요합니다.',
+      azureEndpointInvalid:
+        'Azure Endpoint는 https://your-resource.openai.azure.com 같은 리소스 루트여야 합니다.',
+      azureEndpointConflict:
+        'Azure Endpoint에 이미 배포 이름이 포함되어 있습니다. 리소스 루트와 배포 이름을 따로 입력하세요.',
+      azureUnsupportedProtocol: 'Azure OpenAI는 Chat Completions와 Responses만 지원합니다.',
       llmStreamError: '서버가 스트림 오류를 반환했습니다. 모델과 요청 설정을 확인하세요.',
       saveProtocol: '프로토콜 설정 저장',
       thinkingModeHint:

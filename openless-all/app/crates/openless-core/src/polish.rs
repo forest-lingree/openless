@@ -16,6 +16,7 @@ use thiserror::Error;
 use crate::llm_protocol::{LlmProtocolConfig, LlmRequestFormat, StreamEvent, TextEventStream};
 use crate::shared_types::{ChineseScriptPreference, OutputLanguagePreference, QaChatMessage};
 use crate::types::PolishMode;
+use crate::{BackendError, BackendErrorCode};
 
 pub use crate::output_cleaning::*;
 pub use crate::prompt_compose::*;
@@ -93,7 +94,7 @@ pub(crate) fn polish_total_timeout_secs(input_chars: usize) -> Duration {
     polish_first_token_timeout_secs(input_chars) + Duration::from_secs(generation_secs)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct OpenAICompatibleConfig {
     pub protocol: LlmProtocolConfig,
     pub provider_id: String,
@@ -108,6 +109,32 @@ pub struct OpenAICompatibleConfig {
     /// false = 按渠道级官方参数关闭或压低思考。不做模型白名单判断，
     /// 但 OpenAI 官方渠道会跳过已知不支持 reasoning_effort 的普通 chat 模型。
     pub thinking_enabled: bool,
+}
+
+impl std::fmt::Debug for OpenAICompatibleConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let extra_headers = self
+            .extra_headers
+            .keys()
+            .map(|name| (name.as_str(), "[REDACTED]"))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        formatter
+            .debug_struct("OpenAICompatibleConfig")
+            .field("protocol", &self.protocol)
+            .field("provider_id", &self.provider_id)
+            .field("display_name", &self.display_name)
+            .field(
+                "base_url",
+                &crate::net::sanitized_url_for_logs(&self.base_url),
+            )
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("extra_headers", &extra_headers)
+            .field("temperature", &self.temperature)
+            .field("request_timeout_secs", &self.request_timeout_secs)
+            .field("thinking_enabled", &self.thinking_enabled)
+            .finish()
+    }
 }
 
 impl OpenAICompatibleConfig {
@@ -198,6 +225,10 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
             | "opencode"
             | "tencentTokenHub"
     )
+}
+
+fn is_azure_openai_provider(provider_id: &str) -> bool {
+    provider_id.trim() == crate::azure_openai::PROVIDER_ID
 }
 
 #[derive(Debug, Error)]
@@ -511,19 +542,25 @@ pub struct OpenAICompatibleLLMProvider {
 
 impl OpenAICompatibleLLMProvider {
     pub fn new(config: OpenAICompatibleConfig) -> Self {
-        // Reuse a cached client (keyed by timeout + proxy-bypass) so the connection
-        // pool survives across utterances instead of paying a fresh TLS handshake
-        // every polish. Falls back to a default client if the builder somehow fails
-        // so we still surface a useful error at request time.
-        let no_proxy =
-            crate::net::should_bypass_proxy(&config.base_url, crate::net::use_system_proxy());
-        let polish_base_url = config.base_url.clone();
-        let polish_client =
+        let polish_client = if is_azure_openai_provider(&config.provider_id) {
+            crate::net::credential_http_for_url_with_timeout(
+                &config.base_url,
+                POLISH_CLIENT_HARD_CAP_SECS,
+            )
+        } else {
+            // Reuse a cached client (keyed by timeout + proxy-bypass) so the connection
+            // pool survives across utterances instead of paying a fresh TLS handshake
+            // every polish. Keep the existing redirect-following behavior for ordinary
+            // OpenAI-compatible providers.
+            let no_proxy =
+                crate::net::should_bypass_proxy(&config.base_url, crate::net::use_system_proxy());
+            let polish_base_url = config.base_url.clone();
             crate::net::cached_client((POLISH_CLIENT_HARD_CAP_SECS, no_proxy), || {
                 http_client_builder(&polish_base_url, POLISH_CLIENT_HARD_CAP_SECS)
                     .build()
                     .unwrap_or_else(|_| reqwest::Client::new())
-            });
+            })
+        };
         Self {
             config,
             polish_client,
@@ -796,14 +833,43 @@ impl OpenAICompatibleLLMProvider {
                 body["temperature"] = temperature_json(temperature);
             }
         }
-        apply_openai_compatible_thinking_control(
-            &mut body,
-            &self.config.provider_id,
-            &self.config.base_url,
-            &self.config.model,
-            self.config.thinking_enabled,
-        );
+        if !is_azure_openai_provider(&self.config.provider_id) {
+            apply_openai_compatible_thinking_control(
+                &mut body,
+                &self.config.provider_id,
+                &self.config.base_url,
+                &self.config.model,
+                self.config.thinking_enabled,
+            );
+        }
         body
+    }
+
+    fn validate_request_headers(&self) -> Result<(), LLMError> {
+        self.config
+            .protocol
+            .validate()
+            .and_then(|_| {
+                self.config
+                    .protocol
+                    .validate_headers(&self.config.extra_headers)
+            })
+            .and_then(|_| {
+                if is_azure_openai_provider(&self.config.provider_id)
+                    && self.config.extra_headers.keys().any(|name| {
+                        name.eq_ignore_ascii_case("api-key")
+                            || name.eq_ignore_ascii_case("authorization")
+                    })
+                {
+                    Err(BackendError::new(
+                        BackendErrorCode::InvalidArgument,
+                        "azure extra headers must not override authentication headers",
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+            .map_err(|error| LLMError::ParseError(error.message))
     }
 
     /// 共用的 HTTP send + body 解析。chat_completion / chat_completion_with_polish_history
@@ -831,15 +897,7 @@ impl OpenAICompatibleLLMProvider {
         url: &str,
         body: &serde_json::Value,
     ) -> Result<String, LLMError> {
-        self.config
-            .protocol
-            .validate()
-            .and_then(|_| {
-                self.config
-                    .protocol
-                    .validate_headers(&self.config.extra_headers)
-            })
-            .map_err(|error| LLMError::ParseError(error.message))?;
+        self.validate_request_headers()?;
         let request = self
             .authorize(self.polish_client.post(url))
             .header("Content-Type", "application/json")
@@ -911,15 +969,7 @@ impl OpenAICompatibleLLMProvider {
         if should_cancel() {
             return Err(LLMError::Network("cancelled".into()));
         }
-        self.config
-            .protocol
-            .validate()
-            .and_then(|_| {
-                self.config
-                    .protocol
-                    .validate_headers(&self.config.extra_headers)
-            })
-            .map_err(|error| LLMError::ParseError(error.message))?;
+        self.validate_request_headers()?;
         let url = self.config.protocol.format.url(&self.config.base_url)?;
         let body = self.chat_body(true, messages);
         log::info!(
@@ -1026,8 +1076,14 @@ impl OpenAICompatibleLLMProvider {
     }
 
     fn authorize(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        for (name, value) in self.config.protocol.format.headers(&self.config.api_key) {
-            request = request.header(name, value);
+        if is_azure_openai_provider(&self.config.provider_id) {
+            if !self.config.api_key.trim().is_empty() {
+                request = request.header("api-key", self.config.api_key.trim());
+            }
+        } else {
+            for (name, value) in self.config.protocol.format.headers(&self.config.api_key) {
+                request = request.header(name, value);
+            }
         }
         for (name, value) in &self.config.extra_headers {
             request = request.header(name, value);
@@ -2045,7 +2101,7 @@ mod tests {
         );
     }
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::Mutex as StdMutex;
+    use std::sync::{mpsc, Mutex as StdMutex};
     use std::thread;
 
     static CODEX_AUTH_FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -2561,6 +2617,421 @@ mod tests {
             );
             assert_eq!(*output.lock().unwrap(), "你好");
             server.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_http_uses_api_key_auth_and_supports_chat_and_responses() {
+        for (format, model) in [
+            (LlmRequestFormat::ChatCompletions, "gpt-4.1"),
+            (LlmRequestFormat::Responses, "gpt-5"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                for index in 0..2 {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let request = read_http_request(&mut stream);
+                    let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+                    let headers = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
+                    let body: Value = serde_json::from_slice(&request[split + 4..]).unwrap();
+                    let path = match format {
+                        LlmRequestFormat::ChatCompletions => "chat/completions",
+                        LlmRequestFormat::Responses => "responses",
+                        LlmRequestFormat::Messages => unreachable!(),
+                    };
+                    assert!(headers.starts_with(&format!("post /openai/v1/{path}?tenant=1 ")));
+                    assert!(headers.contains("api-key: fixture-key"));
+                    assert!(!headers.contains("authorization:"));
+                    assert_eq!(body["model"], json!(model));
+                    match format {
+                        LlmRequestFormat::ChatCompletions => {
+                            assert!(body.get("reasoning").is_none());
+                            assert!(body.get("reasoning_effort").is_none());
+                            assert!(body.get("enable_thinking").is_none());
+                            assert!(body.get("thinking").is_none());
+                            assert!(body.get("temperature").is_none());
+                        }
+                        LlmRequestFormat::Responses => {
+                            assert!(body.get("reasoning").is_none());
+                            assert!(body.get("temperature").is_none());
+                        }
+                        LlmRequestFormat::Messages => unreachable!(),
+                    }
+                    if index == 0 {
+                        assert_eq!(body["stream"], false);
+                        let response = match format {
+                            LlmRequestFormat::ChatCompletions => {
+                                json!({"choices":[{"message":{"content":"你好"}}]}).to_string()
+                            }
+                            LlmRequestFormat::Responses => json!({"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"你好"}]}]}).to_string(),
+                            LlmRequestFormat::Messages => unreachable!(),
+                        };
+                        write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+                    } else {
+                        assert_eq!(body["stream"], true);
+                        let response = match format {
+                            LlmRequestFormat::ChatCompletions => "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\r\n\r\ndata: [DONE]\r\n\r\n",
+                            LlmRequestFormat::Responses => "data: {\"type\":\"response.output_text.delta\",\"delta\":\"你好\"}\r\n\r\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\r\n\r\n",
+                            LlmRequestFormat::Messages => unreachable!(),
+                        };
+                        let split = response.find('好').unwrap() + 1;
+                        write_chunked_sse_response(
+                            &mut stream,
+                            &[&response.as_bytes()[..split], &response.as_bytes()[split..]],
+                        );
+                    }
+                }
+            });
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "azure-openai",
+                    "Azure OpenAI",
+                    format!("http://{address}/openai/v1/chat/completions?tenant=1"),
+                    "fixture-key",
+                    model,
+                )
+                .with_protocol(LlmProtocolConfig {
+                    format,
+                    ..Default::default()
+                })
+                .with_thinking_enabled(true),
+            );
+            assert_eq!(
+                provider
+                    .chat_completion("sys", "user", std::time::Duration::from_secs(1))
+                    .await
+                    .unwrap(),
+                "你好"
+            );
+            let output = std::sync::Mutex::new(String::new());
+            let delta = |text: &str| output.lock().unwrap().push_str(text);
+            assert_eq!(
+                provider
+                    .chat_completion_messages_streaming(
+                        vec![json!({ "role": "user", "content": "hello" })],
+                        StreamingTimeouts {
+                            first_token: std::time::Duration::from_secs(1),
+                            idle: std::time::Duration::from_secs(1),
+                        },
+                        delta,
+                        || false,
+                    )
+                    .await
+                    .unwrap(),
+                "你好"
+            );
+            assert_eq!(*output.lock().unwrap(), "你好");
+            server.join().unwrap();
+        }
+    }
+
+    struct RedirectServer {
+        url: String,
+        stop_target: mpsc::Sender<()>,
+        target_request: mpsc::Receiver<String>,
+        source_thread: thread::JoinHandle<()>,
+        target_thread: thread::JoinHandle<()>,
+    }
+
+    impl RedirectServer {
+        fn shutdown(self) -> Option<String> {
+            let _ = self.stop_target.send(());
+            self.source_thread.join().unwrap();
+            self.target_thread.join().unwrap();
+            self.target_request.try_recv().ok()
+        }
+    }
+
+    fn spawn_azure_redirect_server(
+        format: LlmRequestFormat,
+        status: u16,
+        reason: &'static str,
+    ) -> RedirectServer {
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        target.set_nonblocking(true).unwrap();
+        let target_url = format!("http://{}", target.local_addr().unwrap());
+        let source = TcpListener::bind("127.0.0.1:0").unwrap();
+        let source_url = format!(
+            "http://{}/openai/v1/chat/completions?tenant=1",
+            source.local_addr().unwrap()
+        );
+        let (target_tx, target_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = mpsc::channel();
+
+        let target_thread = thread::spawn(move || loop {
+            match target.accept() {
+                Ok((mut stream, _)) => {
+                    let request = read_http_request(&mut stream);
+                    let request_text = String::from_utf8_lossy(&request).to_string();
+                    let body = if request_text.contains(r#""stream":true"#) {
+                        match format {
+                            LlmRequestFormat::ChatCompletions => {
+                                "data: {\"choices\":[{\"delta\":{\"content\":\"leaked\"}}]}\r\n\r\ndata: [DONE]\r\n\r\n".to_string()
+                            }
+                            LlmRequestFormat::Responses => {
+                                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"leaked\"}\r\n\r\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\r\n\r\n".to_string()
+                            }
+                            LlmRequestFormat::Messages => unreachable!(),
+                        }
+                    } else {
+                        match format {
+                            LlmRequestFormat::ChatCompletions => {
+                                json!({"choices":[{"message":{"content":"leaked"}}]}).to_string()
+                            }
+                            LlmRequestFormat::Responses => json!({"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"leaked"}]}]}).to_string(),
+                            LlmRequestFormat::Messages => unreachable!(),
+                        }
+                    };
+                    target_tx.send(request_text).unwrap();
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .unwrap();
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if stop_rx.try_recv().is_ok() {
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => panic!("target accept failed: {error}"),
+            }
+        });
+
+        let source_thread = thread::spawn(move || {
+            let (mut stream, _) = source.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            let headers = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
+            let body: Value = serde_json::from_slice(&request[split + 4..]).unwrap();
+            let path = match format {
+                LlmRequestFormat::ChatCompletions => "chat/completions",
+                LlmRequestFormat::Responses => "responses",
+                LlmRequestFormat::Messages => unreachable!(),
+            };
+            assert!(headers.starts_with(&format!("post /openai/v1/{path}?tenant=1 ")));
+            assert!(headers.contains("api-key: dummy-secret"));
+            assert!(!headers.contains("authorization:"));
+            assert_eq!(body["model"], json!("azure-model"));
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nLocation: {target_url}/redirect-target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        RedirectServer {
+            url: source_url,
+            stop_target: stop_tx,
+            target_request: target_rx,
+            source_thread,
+            target_thread,
+        }
+    }
+
+    fn spawn_openai_redirect_server(
+        format: LlmRequestFormat,
+        status: u16,
+        reason: &'static str,
+    ) -> RedirectServer {
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        target.set_nonblocking(true).unwrap();
+        let target_url = format!("http://{}", target.local_addr().unwrap());
+        let source = TcpListener::bind("127.0.0.1:0").unwrap();
+        let source_url = format!(
+            "http://{}/openai/v1/chat/completions?tenant=1",
+            source.local_addr().unwrap()
+        );
+        let (target_tx, target_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = mpsc::channel();
+
+        let target_thread = thread::spawn(move || loop {
+            match target.accept() {
+                Ok((mut stream, _)) => {
+                    let request = read_http_request(&mut stream);
+                    let request_text = String::from_utf8_lossy(&request).to_string();
+                    let body = match format {
+                        LlmRequestFormat::ChatCompletions => {
+                            json!({"choices":[{"message":{"content":"redirect ok"}}]}).to_string()
+                        }
+                        LlmRequestFormat::Responses => json!({"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"redirect ok"}]}]}).to_string(),
+                        LlmRequestFormat::Messages => unreachable!(),
+                    };
+                    target_tx.send(request_text).unwrap();
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .unwrap();
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if stop_rx.try_recv().is_ok() {
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => panic!("target accept failed: {error}"),
+            }
+        });
+
+        let source_thread = thread::spawn(move || {
+            let (mut stream, _) = source.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            let headers = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
+            let body: Value = serde_json::from_slice(&request[split + 4..]).unwrap();
+            let path = match format {
+                LlmRequestFormat::ChatCompletions => "chat/completions",
+                LlmRequestFormat::Responses => "responses",
+                LlmRequestFormat::Messages => unreachable!(),
+            };
+            assert!(headers.starts_with(&format!("post /openai/v1/{path}?tenant=1 ")));
+            assert!(headers.contains("authorization: bearer ordinary-secret"));
+            assert!(!headers.contains("api-key:"));
+            assert_eq!(body["model"], json!("ordinary-model"));
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nLocation: {target_url}/redirect-target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        RedirectServer {
+            url: source_url,
+            stop_target: stop_tx,
+            target_request: target_rx,
+            source_thread,
+            target_thread,
+        }
+    }
+
+    async fn exercise_azure_redirect(
+        format: LlmRequestFormat,
+        streaming: bool,
+        status: u16,
+        reason: &'static str,
+    ) -> (Result<String, LLMError>, Option<String>) {
+        let server = spawn_azure_redirect_server(format, status, reason);
+        let _ordinary_cache_warmer = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "ark",
+            "Ordinary OpenAI-compatible",
+            server.url.clone(),
+            "ordinary-secret",
+            "ordinary-model",
+        ));
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "azure-openai",
+                "Azure OpenAI",
+                server.url.clone(),
+                "dummy-secret",
+                "azure-model",
+            )
+            .with_protocol(LlmProtocolConfig {
+                format,
+                ..Default::default()
+            }),
+        );
+
+        let result = if streaming {
+            provider
+                .chat_completion_messages_streaming(
+                    vec![json!({ "role": "user", "content": "hello" })],
+                    StreamingTimeouts {
+                        first_token: std::time::Duration::from_secs(1),
+                        idle: std::time::Duration::from_secs(1),
+                    },
+                    |_| {},
+                    || false,
+                )
+                .await
+        } else {
+            provider
+                .chat_completion("sys", "user", std::time::Duration::from_secs(1))
+                .await
+        };
+        let target_request = server.shutdown();
+        (result, target_request)
+    }
+
+    #[tokio::test]
+    async fn azure_llm_never_follows_redirects_or_forwards_api_key() {
+        for (format, streaming, status, reason) in [
+            (
+                LlmRequestFormat::ChatCompletions,
+                false,
+                307,
+                "Temporary Redirect",
+            ),
+            (LlmRequestFormat::ChatCompletions, true, 302, "Found"),
+            (LlmRequestFormat::Responses, false, 302, "Found"),
+            (LlmRequestFormat::Responses, true, 307, "Temporary Redirect"),
+        ] {
+            let (result, target_request) =
+                exercise_azure_redirect(format, streaming, status, reason).await;
+            assert!(
+                target_request.is_none(),
+                "Azure redirect target was contacted and received: {}",
+                target_request.unwrap_or_default()
+            );
+            match result {
+                Err(LLMError::InvalidResponse { status: actual, .. }) => {
+                    assert_eq!(actual, status)
+                }
+                other => panic!("expected Azure {status} response, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_llm_still_follows_redirects_after_azure_cache_warm() {
+        for format in [
+            LlmRequestFormat::ChatCompletions,
+            LlmRequestFormat::Responses,
+        ] {
+            let server = spawn_openai_redirect_server(format, 302, "Found");
+            let _azure_cache_warmer = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "azure-openai",
+                    "Azure OpenAI",
+                    server.url.clone(),
+                    "dummy-secret",
+                    "azure-model",
+                )
+                .with_protocol(LlmProtocolConfig {
+                    format,
+                    ..Default::default()
+                }),
+            );
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "ark",
+                    "Ordinary OpenAI-compatible",
+                    server.url.clone(),
+                    "ordinary-secret",
+                    "ordinary-model",
+                )
+                .with_protocol(LlmProtocolConfig {
+                    format,
+                    ..Default::default()
+                }),
+            );
+
+            let result = provider
+                .chat_completion("sys", "user", std::time::Duration::from_secs(1))
+                .await;
+            let target_request = server.shutdown();
+
+            assert_eq!(result.unwrap(), "redirect ok");
+            let target_request =
+                target_request.expect("ordinary provider should still follow redirects");
+            assert!(!target_request.to_ascii_lowercase().contains("api-key:"));
         }
     }
 
@@ -3317,6 +3788,66 @@ mod tests {
     }
 
     #[test]
+    fn azure_chat_body_treats_deployments_as_opaque_and_keeps_explicit_temperature() {
+        for model in ["writing-prod", "gpt-4.1"] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "azure-openai",
+                    "Azure OpenAI",
+                    "https://example.openai.azure.com/openai/v1/chat/completions",
+                    "k",
+                    model,
+                )
+                .with_thinking_enabled(true),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["model"], json!(model));
+            assert!(
+                body.get("temperature").is_none(),
+                "{model} keeps Azure default"
+            );
+            assert!(body.get("reasoning").is_none(), "{model} must stay opaque");
+            assert!(
+                body.get("reasoning_effort").is_none(),
+                "{model} must stay opaque"
+            );
+            assert!(
+                body.get("enable_thinking").is_none(),
+                "{model} must stay opaque"
+            );
+            assert!(body.get("thinking").is_none(), "{model} must stay opaque");
+
+            let explicit = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "azure-openai",
+                    "Azure OpenAI",
+                    "https://example.openai.azure.com/openai/v1/chat/completions",
+                    "k",
+                    model,
+                )
+                .with_thinking_enabled(true)
+                .with_temperature(Some(0.7)),
+            );
+
+            let explicit_body =
+                explicit.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(explicit_body["model"], json!(model));
+            assert_eq!(explicit_body["temperature"], json!(0.7));
+            assert!(
+                explicit_body.get("reasoning").is_none(),
+                "{model} must stay opaque"
+            );
+            assert!(
+                explicit_body.get("reasoning_effort").is_none(),
+                "{model} must stay opaque"
+            );
+        }
+    }
+
+    #[test]
     fn provider_temperature_policy_makes_custom_opt_in() {
         assert_eq!(
             openai_compatible_temperature_for_provider("custom", None),
@@ -3342,6 +3873,67 @@ mod tests {
             openai_compatible_temperature_for_provider("atlascloud", None),
             Some(DEFAULT_TEMPERATURE)
         );
+        assert_eq!(
+            openai_compatible_temperature_for_provider("azure-openai", None),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn azure_key_collisions_are_rejected_before_http() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "azure-openai",
+                "Azure OpenAI",
+                "http://127.0.0.1:1/openai/v1/chat/completions",
+                "fixture-key",
+                "writing-prod",
+            )
+            .with_extra_headers(HashMap::from([(
+                "API-Key".to_string(),
+                "override-secret".to_string(),
+            )])),
+        );
+
+        let error = provider
+            .chat_completion("sys", "user", std::time::Duration::from_secs(1))
+            .await
+            .unwrap_err();
+
+        match error {
+            LLMError::ParseError(message) => {
+                assert_eq!(
+                    message,
+                    "azure extra headers must not override authentication headers"
+                );
+            }
+            other => panic!("expected ParseError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn azure_debug_redacts_secrets_and_sanitizes_urls() {
+        let config = OpenAICompatibleConfig::new(
+            "azure-openai",
+            "Azure OpenAI",
+            "https://user:pass@example.openai.azure.com/openai/v1/chat/completions?api-version=2024-10-21#frag",
+            "fixture-key",
+            "writing-prod",
+        )
+        .with_extra_headers(HashMap::from([(
+            "x-ms-client-request-id".to_string(),
+            "trace-secret".to_string(),
+        )]));
+
+        let rendered = format!("{config:?}");
+
+        assert!(rendered.contains("azure-openai"));
+        assert!(rendered.contains("https://example.openai.azure.com/openai/v1/chat/completions"));
+        assert!(rendered.contains("[REDACTED]"));
+        assert!(!rendered.contains("fixture-key"));
+        assert!(!rendered.contains("trace-secret"));
+        assert!(!rendered.contains("api-version=2024-10-21"));
+        assert!(!rendered.contains("user:pass"));
     }
 
     #[test]

@@ -24,6 +24,8 @@ export interface ProviderDescriptor {
   authRequirement: AuthRequirement;
   validationProbe: string;
   staticModels: string[];
+  supportsModelListing?: boolean;
+  supportsThinking?: boolean;
   defaultRequestFormat: LlmRequestFormat | null;
   supportedRequestFormats: LlmRequestFormat[];
 }

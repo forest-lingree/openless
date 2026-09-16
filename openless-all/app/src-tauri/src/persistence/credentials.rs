@@ -380,6 +380,8 @@ struct CredsAsrEntry {
     volcengineApiKey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vocabularyId: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    azureApiVersion: Option<String>,
     /// 通用 OpenAI 兼容 ASR(openai-compatible)的高级配置 JSON:
     /// `{"verboseJson": bool, "chunkDurationMs": number|null}`。
     /// 仅该预设读取;命名厂商的怪癖开关保持硬编码,不受此字段影响。
@@ -427,6 +429,7 @@ impl CredsAsrEntry {
             && self.authMode.as_deref().unwrap_or("").is_empty()
             && self.volcengineApiKey.as_deref().unwrap_or("").is_empty()
             && self.vocabularyId.as_deref().unwrap_or("").is_empty()
+            && self.azureApiVersion.as_deref().unwrap_or("").is_empty()
             && self.advancedConfig.as_deref().unwrap_or("").is_empty()
             && self.xfyunAppId.as_deref().unwrap_or("").is_empty()
             && self.xfyunApiKey.as_deref().unwrap_or("").is_empty()
@@ -1711,6 +1714,7 @@ fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String
         CredentialAccount::AsrEndpoint => asr.and_then(|e| pick(&e.baseURL)),
         CredentialAccount::AsrModel => asr.and_then(|e| pick(&e.model)),
         CredentialAccount::AsrVocabularyId => asr.and_then(|e| pick(&e.vocabularyId)),
+        CredentialAccount::AsrAzureApiVersion => asr.and_then(|e| pick(&e.azureApiVersion)),
         CredentialAccount::AsrAdvancedConfig => asr.and_then(|e| pick(&e.advancedConfig)),
         CredentialAccount::XfyunAppId => asr.and_then(|e| pick(&e.xfyunAppId)),
         CredentialAccount::XfyunApiKey => asr.and_then(|e| pick(&e.xfyunApiKey)),
@@ -1820,6 +1824,10 @@ fn write_account(root: &mut CredsRoot, account: CredentialAccount, value: Option
             let entry = root.providers.asr.entry(asr_id).or_default();
             entry.vocabularyId = normalized;
         }
+        CredentialAccount::AsrAzureApiVersion => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.azureApiVersion = normalized;
+        }
         CredentialAccount::AsrAdvancedConfig => {
             let entry = root.providers.asr.entry(asr_id).or_default();
             entry.advancedConfig = normalized;
@@ -1879,6 +1887,8 @@ pub enum CredentialAccount {
     AsrModel,
     /// Active ASR provider's optional hotword vocabulary ID.
     AsrVocabularyId,
+    /// Active ASR provider's Azure OpenAI API version.
+    AsrAzureApiVersion,
     /// 通用 OpenAI 兼容 ASR 的高级配置 JSON（verboseJson / chunkDurationMs）。
     AsrAdvancedConfig,
     /// 讯飞开放平台应用 ID。
@@ -1918,6 +1928,7 @@ impl CredentialAccount {
             CredentialAccount::AsrEndpoint => "asr.endpoint",
             CredentialAccount::AsrModel => "asr.model",
             CredentialAccount::AsrVocabularyId => "asr.vocabulary_id",
+            CredentialAccount::AsrAzureApiVersion => "asr.azure_api_version",
             CredentialAccount::AsrAdvancedConfig => "asr.advanced_config",
             CredentialAccount::XfyunAppId => "xfyun.app_id",
             CredentialAccount::XfyunApiKey => "xfyun.api_key",
@@ -1945,6 +1956,7 @@ impl CredentialAccount {
             CredentialAccount::AsrEndpoint,
             CredentialAccount::AsrModel,
             CredentialAccount::AsrVocabularyId,
+            CredentialAccount::AsrAzureApiVersion,
             CredentialAccount::AsrAdvancedConfig,
             CredentialAccount::XfyunAppId,
             CredentialAccount::XfyunApiKey,
@@ -1970,6 +1982,7 @@ pub struct CredentialsSnapshot {
     pub asr_api_key: Option<String>,
     pub asr_endpoint: Option<String>,
     pub asr_model: Option<String>,
+    pub asr_azure_api_version: Option<String>,
     pub xfyun_app_id: Option<String>,
     pub xfyun_api_key: Option<String>,
     pub tencent_cloud_app_id: Option<String>,
@@ -2028,6 +2041,7 @@ fn credentials_snapshot(root: &CredsRoot, include_omni: bool) -> CredentialsSnap
         asr_api_key: lookup_account(root, CredentialAccount::AsrApiKey),
         asr_endpoint: lookup_account(root, CredentialAccount::AsrEndpoint),
         asr_model: lookup_account(root, CredentialAccount::AsrModel),
+        asr_azure_api_version: lookup_account(root, CredentialAccount::AsrAzureApiVersion),
         xfyun_app_id: lookup_account(root, CredentialAccount::XfyunAppId),
         xfyun_api_key: lookup_account(root, CredentialAccount::XfyunApiKey),
         tencent_cloud_app_id: lookup_account(root, CredentialAccount::TencentCloudAppId),
@@ -3133,6 +3147,73 @@ mod tests {
         let legacy: CredsAsrEntry = serde_json::from_str(r#"{"apiKey":"k"}"#).unwrap();
         assert!(legacy.advancedConfig.is_none());
         assert!(!legacy.is_empty());
+    }
+
+    #[test]
+    fn azure_asr_api_version_round_trips_through_provider_entries_and_snapshot() {
+        let mut root = CredsRoot::default();
+        root.active.asr = "channel-a".into();
+        write_account(
+            &mut root,
+            CredentialAccount::AsrAzureApiVersion,
+            Some("2024-10-21".into()),
+        );
+        root.active.asr = "channel-b".into();
+        write_account(
+            &mut root,
+            CredentialAccount::AsrAzureApiVersion,
+            Some("2025-01-01-preview".into()),
+        );
+        root.active.asr = "channel-a".into();
+        let serialized = serde_json::to_value(&root).unwrap();
+        let serialized = serde_json::to_string(&serialized).unwrap();
+        let restored: CredsRoot = serde_json::from_str(&serialized).unwrap();
+        let snapshot_a = super::credentials_snapshot(&restored, false);
+        let mut switched = restored.clone();
+        switched.active.asr = "channel-b".into();
+        let snapshot_b = super::credentials_snapshot(&switched, false);
+
+        assert_eq!(
+            lookup_account(&restored, CredentialAccount::AsrAzureApiVersion).as_deref(),
+            Some("2024-10-21")
+        );
+        assert_eq!(
+            lookup_account(&restored, CredentialAccount::AsrApiKey),
+            None
+        );
+        assert!(serialized.contains("\"azureApiVersion\":\"2024-10-21\""));
+        assert!(serialized.contains("\"azureApiVersion\":\"2025-01-01-preview\""));
+        assert_eq!(snapshot_a.asr_azure_api_version.as_deref(), Some("2024-10-21"));
+        assert_eq!(snapshot_a.asr_api_key, None);
+        assert_eq!(snapshot_b.asr_azure_api_version.as_deref(), Some("2025-01-01-preview"));
+    }
+
+    #[test]
+    fn azure_asr_api_version_missing_on_one_channel_does_not_clear_another() {
+        let mut root = CredsRoot::default();
+        root.active.asr = "channel-a".into();
+        write_account(
+            &mut root,
+            CredentialAccount::AsrAzureApiVersion,
+            Some("2024-10-21".into()),
+        );
+        root.active.asr = "channel-b".into();
+        write_account(
+            &mut root,
+            CredentialAccount::AsrAzureApiVersion,
+            Some("2025-01-01-preview".into()),
+        );
+        root.active.asr = "channel-a".into();
+        write_account(&mut root, CredentialAccount::AsrAzureApiVersion, None);
+        let snapshot_a = super::credentials_snapshot(&root, false);
+        let mut switched = root.clone();
+        switched.active.asr = "channel-b".into();
+        let snapshot_b = super::credentials_snapshot(&switched, false);
+
+        assert_eq!(lookup_account(&root, CredentialAccount::AsrAzureApiVersion), None);
+        assert!(root.providers.asr["channel-a"].azureApiVersion.is_none());
+        assert_eq!(snapshot_a.asr_azure_api_version, None);
+        assert_eq!(snapshot_b.asr_azure_api_version.as_deref(), Some("2025-01-01-preview"));
     }
 
     #[test]

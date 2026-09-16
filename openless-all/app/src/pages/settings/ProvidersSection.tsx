@@ -128,6 +128,7 @@ function LlmThinkingToggle({
 // ProviderDescriptor，避免每个平台各维护一份会漂移的业务真相。
 export const LLM_LABELS = [
   ['ark', 'ark'],
+  ['azure-openai', 'azureOpenai'],
   ['deepseek', 'deepseek'],
   ['siliconflow', 'siliconflow'],
   ['atlascloud', 'atlascloud'],
@@ -155,6 +156,15 @@ const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
 /** 模型预设下拉里的「自定义模型…」哨兵值：选中即切回输入框手输。 */
 const CUSTOM_MODEL_OPTION_VALUE = '__custom_model__';
+export const AZURE_ENDPOINT_PLACEHOLDER = 'https://your-resource.openai.azure.com';
+export const AZURE_DEPLOYMENT_PLACEHOLDER = 'deployment-name';
+export const AZURE_ASR_API_VERSION_ACCOUNT = 'asr.azure_api_version';
+
+export function azureApiVersionValidationError(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return 'azureApiVersionRequired';
+  return /^\d{4}-\d{2}-\d{2}(?:-preview)?$/.test(trimmed) ? null : 'azureApiVersionInvalid';
+}
 
 function matchesEndpointPreset(value: string, endpoint: string): boolean {
   try {
@@ -206,6 +216,8 @@ export function ChannelCredentialFields({
       | 'staticModels'
       | 'defaultRequestFormat'
       | 'supportedRequestFormats'
+      | 'supportsModelListing'
+      | 'supportsThinking'
     >
   >;
   /** 测试连通出结果后通知外层刷新卡片上的延迟/标红。 */
@@ -298,8 +310,11 @@ export function ChannelCredentialFields({
   }
 
   if (kind === 'llm') {
+    const azureOpenai = providerType === 'azure-openai';
     const defaultEndpoint = descriptor?.defaultEndpoint;
     const defaultModel = descriptor?.defaultModel;
+    const supportsModelListing = descriptor.supportsModelListing !== false;
+    const supportsThinking = descriptor.supportsThinking !== false;
     const modelsUrl = descriptor.endpointPresets?.find((preset) =>
       matchesEndpointPreset(llmEndpoint || defaultEndpoint || '', preset.endpoint),
     )?.modelsUrl;
@@ -311,6 +326,7 @@ export function ChannelCredentialFields({
             channelId={channelId}
             defaultFormat={descriptor.defaultRequestFormat}
             formats={descriptor.supportedRequestFormats}
+            supportsThinking={supportsThinking}
             onUserMutation={onLlmMutation}
             onBlockedChange={trackField}
             onSaved={(changedAccounts) => {
@@ -371,7 +387,11 @@ export function ChannelCredentialFields({
                   : undefined
               }
               provider={channelId}
-              placeholder={defaultEndpoint || 'https://your-endpoint/v1'}
+              placeholder={
+                azureOpenai
+                  ? AZURE_ENDPOINT_PLACEHOLDER
+                  : defaultEndpoint || 'https://your-endpoint/v1'
+              }
               defaultValue={defaultEndpoint || undefined}
               onUserMutation={onLlmMutation}
               onBlockedChange={trackField}
@@ -398,7 +418,11 @@ export function ChannelCredentialFields({
             icon="settings"
             title={t('settings.channels.modelTitle')}
             description={t(
-              modelsUrl ? 'settings.providers.planModelsHint' : 'settings.channels.modelHint',
+              azureOpenai
+                ? 'settings.providers.azureDeploymentHint'
+                : modelsUrl
+                  ? 'settings.providers.planModelsHint'
+                  : 'settings.channels.modelHint',
             )}
           />
         </div>
@@ -421,23 +445,42 @@ export function ChannelCredentialFields({
         ) : (
           <CredentialField
             key={`${channelId}:model:${llmModelRevision}`}
-            label={t('settings.providers.modelLabel')}
+            label={
+              azureOpenai
+                ? t('settings.providers.azureDeploymentLabel')
+                : t('settings.providers.modelLabel')
+            }
             account="ark.model_id"
             provider={channelId}
-            placeholder={defaultModel || 'model-name'}
+            placeholder={azureOpenai ? AZURE_DEPLOYMENT_PLACEHOLDER : defaultModel || 'model-name'}
             mono
             defaultValue={defaultModel || undefined}
+            hint={azureOpenai ? t('settings.providers.azureDeploymentHint') : undefined}
             onUserMutation={onLlmMutation}
             onBlockedChange={trackField}
             trailing={
-              <LlmThinkingToggle
-                enabled={prefs?.llmThinkingEnabled ?? false}
-                onToggle={onLlmThinkingToggle}
-              />
+              supportsThinking ? (
+                <LlmThinkingToggle
+                  enabled={prefs?.llmThinkingEnabled ?? false}
+                  onToggle={onLlmThinkingToggle}
+                />
+              ) : undefined
             }
           />
         )}
-        {['custom', 'custom_responses', 'custom_messages'].includes(providerType) && (
+        {azureOpenai && (
+          <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+            {t('settings.providers.azureManualDeployment')}
+          </div>
+        )}
+        {azureOpenai && !supportsThinking && (
+          <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+            {t('settings.providers.azureThinkingHint')}
+          </div>
+        )}
+        {['custom', 'custom_responses', 'custom_messages', 'azure-openai'].includes(
+          providerType,
+        ) && (
           <CredentialField
             key={`${channelId}:temperature`}
             label={t('settings.providers.temperatureLabel')}
@@ -459,10 +502,10 @@ export function ChannelCredentialFields({
           modelAccount="ark.model_id"
           modelsUrl={modelsUrl}
           provider={channelId}
+          showFetchModels={supportsModelListing && providerType !== 'orcarouter'}
           onModelSelected={() => setLlmModelRevision((v) => v + 1)}
           onTested={onTested}
           onUserMutation={onUserMutation}
-          showFetchModels={providerType !== 'orcarouter'}
         />
       </>
     );
@@ -470,6 +513,8 @@ export function ChannelCredentialFields({
 
   const defaultEndpoint = descriptor?.defaultEndpoint;
   const defaultModel = descriptor?.defaultModel;
+  const azureOpenai = providerType === 'azure-openai';
+  const supportsModelListing = descriptor.supportsModelListing !== false;
 
   if (descriptor?.authRequirement === 'volcengine') {
     const agentPlan = volcengineService === 'agent_plan';
@@ -653,6 +698,86 @@ export function ChannelCredentialFields({
           onModelSelected={() => setAsrModelRevision((v) => v + 1)}
           onTested={onTested}
           onUserMutation={onUserMutation}
+        />
+      </>
+    );
+  }
+
+  if (azureOpenai) {
+    const blocked = Object.values(blockedFields).some(Boolean);
+    return (
+      <>
+        <CredentialField
+          key={`${channelId}:api_key`}
+          label={t('settings.providers.apiKeyLabel')}
+          account="asr.api_key"
+          provider={channelId}
+          mono
+          mask
+          onUserMutation={onAsrMutation}
+          onBlockedChange={trackField}
+        />
+        <CredentialField
+          key={`${channelId}:endpoint`}
+          label={t('settings.providers.baseUrlLabel')}
+          account="asr.endpoint"
+          provider={channelId}
+          placeholder={AZURE_ENDPOINT_PLACEHOLDER}
+          onUserMutation={onAsrMutation}
+          onBlockedChange={trackField}
+        />
+        <div style={channelSectionStyle}>
+          <ChannelSectionHeading
+            icon="settings"
+            title={t('settings.channels.modelTitle')}
+            description={t('settings.providers.azureDeploymentHint')}
+          />
+        </div>
+        <CredentialField
+          key={`${channelId}:model:${asrModelRevision}`}
+          label={t('settings.providers.azureDeploymentLabel')}
+          account="asr.model"
+          provider={channelId}
+          placeholder={AZURE_DEPLOYMENT_PLACEHOLDER}
+          mono
+          hint={t('settings.providers.azureDeploymentHint')}
+          onUserMutation={onAsrMutation}
+          onBlockedChange={trackField}
+        />
+        <CredentialField
+          key={`${channelId}:azure_api_version`}
+          label={t('settings.providers.azureApiVersionLabel')}
+          account={AZURE_ASR_API_VERSION_ACCOUNT}
+          provider={channelId}
+          placeholder="YYYY-MM-DD"
+          mono
+          hint={t('settings.providers.azureApiVersionHint')}
+          validate={(value) => {
+            const error = azureApiVersionValidationError(value);
+            return error ? t(`settings.providers.${error}`) : null;
+          }}
+          onUserMutation={onAsrMutation}
+          onBlockedChange={trackField}
+        />
+        <div
+          role="note"
+          style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}
+        >
+          {t('settings.providers.azureTranscriptionHint')}
+        </div>
+        <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+          {t('settings.providers.azureManualDeployment')}
+        </div>
+        <ProviderTools
+          key={configRevision}
+          disabled={blocked}
+          kind="asr"
+          modelAccount="asr.model"
+          provider={channelId}
+          showFetchModels={supportsModelListing}
+          onModelSelected={() => setAsrModelRevision((v) => v + 1)}
+          onTested={onTested}
+          onUserMutation={onAsrMutation}
         />
       </>
     );
@@ -1513,6 +1638,13 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
     'llmResponseIncomplete',
     'llmStreamError',
     'llmProtocolHeaderConflict',
+    'azureApiVersionRequired',
+    'azureApiVersionInvalid',
+    'azureDeploymentRequired',
+    'azureEndpointInvalid',
+    'azureEndpointConflict',
+    'azureUnsupportedProtocol',
+    'azureManualDeployment',
   ]) {
     if (message.includes(code)) return t(`settings.providers.${code}`);
   }
@@ -1564,6 +1696,8 @@ interface CredentialFieldProps {
   mono?: boolean;
   mask?: boolean;
   defaultValue?: string;
+  hint?: string;
+  validate?: (value: string) => string | null;
   trailing?: ReactNode;
   onValueChange?: (value: string) => void;
   /** 只在用户直接改变该字段时触发；初始化读取、复制和显隐不触发。 */
@@ -1582,6 +1716,8 @@ function CredentialField({
   mono,
   mask,
   defaultValue,
+  hint,
+  validate,
   trailing,
   onValueChange,
   onUserMutation,
@@ -1598,19 +1734,30 @@ function CredentialField({
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState<CredentialFieldStatus>('idle');
+  const validationMessage = loaded ? (validate?.(value) ?? null) : null;
   // 预设下拉的「自定义模型…」逃生口：选中后切回输入框，保证后端支持的任意模型名都能手输。
   const [customModelMode, setCustomModelMode] = useState(false);
   useEffect(() => {
     onBlockedChange?.(
       account,
-      !loaded || dirty || status === 'saving' || status === 'readError' || status === 'saveError',
+      !loaded ||
+        dirty ||
+        status === 'saving' ||
+        status === 'readError' ||
+        status === 'saveError' ||
+        validationMessage !== null,
     );
     form?.track(
       account,
-      !loaded || dirty || status === 'saving' || status === 'readError' || status === 'saveError',
+      !loaded ||
+        dirty ||
+        status === 'saving' ||
+        status === 'readError' ||
+        status === 'saveError' ||
+        validationMessage !== null,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- form?.track 与 onBlockedChange 同为稳定引用
-  }, [account, loaded, dirty, status, onBlockedChange]);
+  }, [account, loaded, dirty, status, onBlockedChange, validationMessage]);
 
   const debounceRef = useRef<number | null>(null);
   const statusRef = useRef<number | null>(null);
@@ -1933,6 +2080,14 @@ function CredentialField({
           {showInsecureEndpointWarning && (
             <span style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.45 }}>
               {t('settings.providers.endpointHttpWarning')}
+            </span>
+          )}
+          {hint && (
+            <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.45 }}>{hint}</span>
+          )}
+          {validationMessage && (
+            <span role="alert" style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.45 }}>
+              {validationMessage}
             </span>
           )}
         </div>

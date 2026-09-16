@@ -1243,6 +1243,7 @@ export const ja: typeof zhCN = {
       presets: {
         lmstudio: 'LM Studio',
         ark: 'ARK（Volcengine Ark）',
+        azureOpenai: 'Azure OpenAI',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
         atlascloud: 'Atlas Cloud',
@@ -1355,6 +1356,16 @@ export const ja: typeof zhCN = {
       apiKeyOptionalLabel: 'API キー（任意）',
       baseUrlLabel: 'エンドポイント',
       modelLabel: 'モデル',
+      azureDeploymentLabel: 'デプロイ名',
+      azureDeploymentHint: 'Azure のデプロイ名を入力してください。モデル名と異なる場合があります。',
+      azureApiVersionLabel: 'Azure API バージョン',
+      azureApiVersionHint:
+        '文字起こしに必須です。このデプロイが対応する API バージョンを使用してください。',
+      azureManualDeployment:
+        'Azure のデプロイ名を手動で入力してください。モデル検出は利用できません。',
+      azureThinkingHint: 'Azure はデプロイ側のモデル推論設定の既定値を使用します。',
+      azureTranscriptionHint:
+        '録音停止後に音声を文字起こしします。これは Azure OpenAI であり、Azure AI Speech ではありません。',
       customModelLabel: 'カスタムモデル…',
       presetListLabel: 'プリセットに戻る',
       searchModels: 'モデルを検索…',
@@ -1387,6 +1398,16 @@ export const ja: typeof zhCN = {
       llmResponseIncomplete: '応答が未完了か出力上限に達しました。出力済みテキストは保持されます。',
       llmProtocolHeaderConflict:
         'Messages の認証とバージョンヘッダーは自動設定されます。追加ヘッダーから x-api-key と anthropic-version を削除してください。',
+      azureApiVersionRequired: 'Azure API バージョンが必要です。',
+      azureApiVersionInvalid:
+        'Azure API バージョンは YYYY-MM-DD または YYYY-MM-DD-preview 形式で入力してください。',
+      azureDeploymentRequired: 'Azure のデプロイ名が必要です。',
+      azureEndpointInvalid:
+        'Azure Endpoint は https://your-resource.openai.azure.com のようなリソースのルート URL にしてください。',
+      azureEndpointConflict:
+        'Azure Endpoint にデプロイ名が含まれています。リソースのルート URL とデプロイ名を分けて入力してください。',
+      azureUnsupportedProtocol:
+        'Azure OpenAI は Chat Completions と Responses のみ対応しています。',
       llmStreamError:
         'サーバーがストリームエラーを返しました。モデルとリクエスト設定を確認してください。',
       saveProtocol: 'プロトコル設定を保存',

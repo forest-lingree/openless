@@ -1303,6 +1303,7 @@ export const fr: typeof zhCN = {
         customResponses: 'Personnalisé · Responses',
         customMessages: 'Personnalisé · Messages',
         ark: 'ARK (Volcengine Ark)',
+        azureOpenai: 'Azure OpenAI',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
         atlascloud: 'Atlas Cloud',
@@ -1411,6 +1412,18 @@ export const fr: typeof zhCN = {
       apiKeyOptionalLabel: 'Clé API (facultative)',
       baseUrlLabel: 'URL de base',
       modelLabel: 'Modèle',
+      azureDeploymentLabel: 'Nom du déploiement',
+      azureDeploymentHint:
+        'Saisissez le nom du déploiement Azure, qui peut différer du nom du modèle.',
+      azureApiVersionLabel: 'Version d’API Azure',
+      azureApiVersionHint:
+        'Obligatoire pour la transcription. Utilisez une version d’API prise en charge par votre déploiement.',
+      azureManualDeployment:
+        'Saisissez manuellement un nom de déploiement Azure ; la découverte des modèles n’est pas disponible.',
+      azureThinkingHint:
+        'Azure utilise les valeurs par défaut du déploiement pour les réglages de raisonnement du modèle.',
+      azureTranscriptionHint:
+        'L’audio est transcrit après l’arrêt de l’enregistrement. Il s’agit d’Azure OpenAI, pas d’Azure AI Speech.',
       customModelLabel: 'Modèle personnalisé…',
       presetListLabel: 'Retour aux préréglages',
       temperatureLabel: 'Température',
@@ -1442,6 +1455,16 @@ export const fr: typeof zhCN = {
         'La réponse est incomplète ou a atteint la limite de sortie. Le texte déjà affiché est conservé.',
       llmProtocolHeaderConflict:
         'Messages définit automatiquement les en-têtes d’authentification et de version. Retirez x-api-key et anthropic-version des en-têtes supplémentaires.',
+      azureApiVersionRequired: 'La version d’API Azure est obligatoire.',
+      azureApiVersionInvalid:
+        'La version d’API Azure doit utiliser le format YYYY-MM-DD ou YYYY-MM-DD-preview.',
+      azureDeploymentRequired: 'Le nom du déploiement Azure est obligatoire.',
+      azureEndpointInvalid:
+        'L’endpoint Azure doit être la racine de la ressource, par exemple https://your-resource.openai.azure.com.',
+      azureEndpointConflict:
+        'L’endpoint Azure contient déjà un déploiement. Saisissez séparément la racine de la ressource et le nom du déploiement.',
+      azureUnsupportedProtocol:
+        'Azure OpenAI prend seulement en charge Chat Completions et Responses.',
       llmStreamError:
         'Le serveur a renvoyé une erreur de flux. Vérifiez le modèle et les paramètres de la requête.',
       saveProtocol: 'Enregistrer les réglages du protocole',

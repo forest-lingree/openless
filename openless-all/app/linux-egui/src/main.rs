@@ -22,10 +22,13 @@ mod linux_app {
         TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
-        drain_events, ensure_fcitx5_plugin_installed, EventDrainOutcome, Fcitx5HotkeyListener,
-        FcitxPluginInstallPlan, FcitxPluginStatus, LinuxBackendBuilder, LinuxCapabilitySnapshot,
-        LinuxDesktopSession, LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind,
-        LinuxResourceLayout, SingleInstanceBroker, SingleInstanceRole,
+        azure_api_version_validation_error, drain_events, ensure_fcitx5_plugin_installed,
+        load_azure_request_format_state, model_listing_action, request_format_account_value,
+        request_format_label, validate_azure_editor_state, AzureRequestFormatState,
+        EventDrainOutcome, Fcitx5HotkeyListener, FcitxPluginInstallPlan, FcitxPluginStatus,
+        LinuxBackendBuilder, LinuxCapabilitySnapshot, LinuxDesktopSession, LinuxLaunchIntent,
+        LinuxNativeRuntime, LinuxPackageKind, LinuxResourceLayout, ModelListingAction,
+        SingleInstanceBroker, SingleInstanceRole,
     };
 
     enum UiResult {
@@ -81,6 +84,8 @@ mod linux_app {
         auth_mode: String,
         resource_id: String,
         app_id: String,
+        azure_api_version: String,
+        azure_request_format: AzureRequestFormatState,
         // Secret inputs are intentionally write-only. Loading an editor never
         // exposes an existing key into egui state, logs or screenshots.
         primary_secret: String,
@@ -1467,23 +1472,40 @@ mod linux_app {
                                 });
                             }
                         }
-                        if let Some(url) = editor
-                            .descriptor
-                            .endpoint_presets
-                            .iter()
-                            .find(|preset| {
-                                openless_core::provider_rules::matches_endpoint_preset(
-                                    &editor.endpoint,
-                                    &preset.endpoint,
-                                )
-                            })
-                            .and_then(|preset| preset.models_url.as_deref())
-                        {
-                            self.provider_models.clear();
-                            ui.hyperlink_to("查看支持的模型", url);
-                        } else if ui.button("列出模型").clicked() {
-                            self.provider_models.clear();
-                            self.request_provider_models(editor.kind, editor.channel.id.clone());
+                        match model_listing_action(
+                            editor.descriptor.supports_model_listing,
+                            editor
+                                .descriptor
+                                .endpoint_presets
+                                .iter()
+                                .find(|preset| {
+                                    openless_core::provider_rules::matches_endpoint_preset(
+                                        &editor.endpoint,
+                                        &preset.endpoint,
+                                    )
+                                })
+                                .and_then(|preset| preset.models_url.as_deref()),
+                            editor.channel.provider_type.as_str(),
+                            editor.kind,
+                        ) {
+                            ModelListingAction::Hyperlink(url) => {
+                                self.provider_models.clear();
+                                ui.hyperlink_to("查看支持的模型", url);
+                            }
+                            ModelListingAction::FetchButton => {
+                                if ui.button("列出模型").clicked() {
+                                    self.provider_models.clear();
+                                    self.request_provider_models(
+                                        editor.kind,
+                                        editor.channel.id.clone(),
+                                    );
+                                }
+                            }
+                            ModelListingAction::ManualGuidance(message) => {
+                                self.provider_models.clear();
+                                ui.small(message);
+                            }
+                            ModelListingAction::Hidden => {}
                         }
                     });
                     if !self.provider_models.is_empty() {
@@ -2170,6 +2192,20 @@ mod linux_app {
         )
     }
 
+    fn is_azure_openai_provider(provider_type: &str) -> bool {
+        provider_type == "azure-openai"
+    }
+
+    fn azure_request_format_selected_text(state: &AzureRequestFormatState) -> String {
+        if let Some(invalid) = state.invalid_value.as_deref() {
+            format!("无效：{invalid}")
+        } else if let Some(format) = state.selected {
+            request_format_label(format).to_string()
+        } else {
+            "请选择".to_string()
+        }
+    }
+
     fn provider_descriptor_label(descriptor: &openless_core::ProviderDescriptor) -> String {
         format!(
             "{} ({})",
@@ -2296,6 +2332,37 @@ mod linux_app {
         } else {
             String::new()
         };
+        let azure_api_version = if kind == openless_core::ChannelKind::Asr
+            && is_azure_openai_provider(&channel.provider_type)
+        {
+            read_provider_value(
+                &backend,
+                kind,
+                &channel.id,
+                openless_core::credentials::ASR_AZURE_API_VERSION_ACCOUNT,
+            )
+            .await?
+            .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let azure_request_format = if kind == openless_core::ChannelKind::Llm
+            && is_azure_openai_provider(&channel.provider_type)
+        {
+            load_azure_request_format_state(
+                read_provider_value(
+                    &backend,
+                    kind,
+                    &channel.id,
+                    openless_core::llm_protocol::REQUEST_FORMAT_ACCOUNT,
+                )
+                .await?,
+                descriptor.default_request_format,
+                &descriptor.supported_request_formats,
+            )
+        } else {
+            AzureRequestFormatState::default()
+        };
         Ok(ProviderEditor {
             kind,
             name: channel.name.clone(),
@@ -2307,6 +2374,8 @@ mod linux_app {
             auth_mode,
             resource_id,
             app_id,
+            azure_api_version,
+            azure_request_format,
             primary_secret: String::new(),
             secondary_secret: String::new(),
         })
@@ -2323,6 +2392,71 @@ mod linux_app {
         // This match chooses which input controls to render; it does not decide
         // whether credentials are sufficient. ProviderService validates the
         // descriptor's AuthRequirement again before any protocol request.
+        if is_azure_openai_provider(&editor.channel.provider_type) {
+            secret_edit(ui, "API Key（留空表示不修改）", &mut editor.primary_secret);
+            ui.horizontal(|ui| {
+                ui.label("Endpoint");
+                ui.text_edit_singleline(&mut editor.endpoint);
+            });
+            ui.small("填写 Azure 资源根 URL，例如 https://your-resource.openai.azure.com");
+            if editor.kind == openless_core::ChannelKind::Llm {
+                if !editor.descriptor.supported_request_formats.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.label("请求格式");
+                        egui::ComboBox::from_id_salt(format!(
+                            "azure-request-format-{}",
+                            editor.channel.id
+                        ))
+                        .selected_text(azure_request_format_selected_text(
+                            &editor.azure_request_format,
+                        ))
+                        .show_ui(ui, |ui| {
+                            for format in &editor.descriptor.supported_request_formats {
+                                if ui
+                                    .selectable_label(
+                                        editor.azure_request_format.selected == Some(*format),
+                                        request_format_label(*format),
+                                    )
+                                    .clicked()
+                                {
+                                    editor.azure_request_format.selected = Some(*format);
+                                    editor.azure_request_format.invalid_value = None;
+                                }
+                            }
+                        });
+                    });
+                }
+                if let Some(invalid) = editor.azure_request_format.invalid_value.as_deref() {
+                    ui.colored_label(
+                        egui::Color32::RED,
+                        format!(
+                            "已存储的请求格式无效：{invalid}。请选择 Chat Completions 或 Responses 后再保存。"
+                        ),
+                    );
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.label("Deployment name");
+                ui.text_edit_singleline(&mut editor.model);
+            });
+            ui.small("Deployment name 可与底层模型名不同；请填写 Azure OpenAI 中已部署的名称。");
+            if editor.kind == openless_core::ChannelKind::Asr {
+                ui.horizontal(|ui| {
+                    ui.label("API version");
+                    ui.text_edit_singleline(&mut editor.azure_api_version);
+                });
+                if let Some(error) = azure_api_version_validation_error(&editor.azure_api_version)
+                {
+                    ui.colored_label(egui::Color32::RED, error);
+                } else {
+                    ui.small("必填：YYYY-MM-DD 或 YYYY-MM-DD-preview；不提供默认值。");
+                }
+                ui.small("该渠道使用 Azure OpenAI 音频转写，不是 Azure AI Speech。");
+            } else if !editor.descriptor.supports_thinking {
+                ui.small("Azure 使用部署默认值，不承诺模型级思考设置。");
+            }
+            return;
+        }
         match editor.descriptor.auth_requirement {
             openless_core::AuthRequirement::None => {
                 ui.label("此 Provider 不使用云凭据；模型由本地模型面板管理。");
@@ -2513,6 +2647,12 @@ mod linux_app {
         // Core. Defaults and required/optional semantics stay in the selected
         // ProviderDescriptor and ProviderService, never in this Host form.
         let channel_id = editor.channel.id.as_str();
+        validate_azure_editor_state(
+            editor.kind,
+            editor.channel.provider_type.as_str(),
+            &editor.azure_api_version,
+            &editor.azure_request_format,
+        )?;
         backend
             .rename_channel(editor.kind, channel_id.to_string(), editor.name)
             .await?;
@@ -2656,6 +2796,34 @@ mod linux_app {
                     &editor.primary_secret,
                 )
                 .await?;
+                if editor.kind == openless_core::ChannelKind::Asr
+                    && is_azure_openai_provider(&editor.channel.provider_type)
+                {
+                    write_or_remove_provider_value(
+                        &backend,
+                        editor.kind,
+                        channel_id,
+                        openless_core::credentials::ASR_AZURE_API_VERSION_ACCOUNT,
+                        &editor.azure_api_version,
+                    )
+                    .await?;
+                }
+                if editor.kind == openless_core::ChannelKind::Llm
+                    && is_azure_openai_provider(&editor.channel.provider_type)
+                {
+                    write_or_remove_provider_value(
+                        &backend,
+                        editor.kind,
+                        channel_id,
+                        openless_core::llm_protocol::REQUEST_FORMAT_ACCOUNT,
+                        editor
+                            .azure_request_format
+                            .selected
+                            .map(request_format_account_value)
+                            .unwrap_or_default(),
+                    )
+                    .await?;
+                }
             }
         }
         Ok(())

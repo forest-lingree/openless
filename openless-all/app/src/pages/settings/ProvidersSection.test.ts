@@ -1,7 +1,24 @@
-import { LLM_LABELS } from './ProvidersSection';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import i18n, { i18nReady } from '../../i18n';
+import { en } from '../../i18n/en';
+import { HotkeySettingsProvider } from '../../state/HotkeySettingsContext';
+import {
+  AZURE_DEPLOYMENT_PLACEHOLDER,
+  AZURE_ENDPOINT_PLACEHOLDER,
+  AZURE_ASR_API_VERSION_ACCOUNT,
+  azureApiVersionValidationError,
+  ChannelCredentialFields,
+  LLM_LABELS,
+} from './ProvidersSection';
 import { ASR_LABELS } from './shared';
 import { presetsFor } from './ChannelList';
-import { filterOrcaRouterModels } from '../../lib/ipc/asr-credentials';
+import {
+  filterOrcaRouterModels,
+  readCredential,
+  setCredential,
+} from '../../lib/ipc/asr-credentials';
+import type { ProviderDescriptor } from '../../lib/ipc';
 
 const atlascloudPreset = LLM_LABELS.find((p) => p.id === 'atlascloud');
 if (LLM_LABELS.find((p) => p.id === 'opencode')?.nameKey !== 'opencode') {
@@ -10,8 +27,23 @@ if (LLM_LABELS.find((p) => p.id === 'opencode')?.nameKey !== 'opencode') {
 if (LLM_LABELS.find((p) => p.id === 'tencentTokenHub')?.nameKey !== 'tencentTokenHub') {
   throw new Error('Tencent Cloud TokenHub LLM label is missing');
 }
+if (LLM_LABELS.find((p) => p.id === 'azure-openai')?.nameKey !== 'azureOpenai') {
+  throw new Error('Azure OpenAI LLM label is missing');
+}
+if (ASR_LABELS.find((p) => p.id === 'azure-openai')?.nameKey !== 'azureOpenai') {
+  throw new Error('Azure OpenAI ASR label is missing');
+}
 if (ASR_LABELS.find((p) => p.id === 'tencent-cloud')?.nameKey !== 'asrTencentCloud') {
   throw new Error('Tencent Cloud ASR label is missing');
+}
+if (
+  AZURE_DEPLOYMENT_PLACEHOLDER !== 'deployment-name' ||
+  AZURE_ENDPOINT_PLACEHOLDER !== 'https://your-resource.openai.azure.com' ||
+  AZURE_ASR_API_VERSION_ACCOUNT !== 'asr.azure_api_version'
+) {
+  throw new Error(
+    'Azure settings constants must use deployment, resource-root, and ASR API version slots',
+  );
 }
 
 if (!atlascloudPreset) {
@@ -95,4 +127,143 @@ for (const labels of [LLM_LABELS, ASR_LABELS]) {
   if (!labels.some((label) => label.id === 'orcarouter' && label.nameKey === 'orcarouter')) {
     throw new Error('OrcaRouter provider label is missing');
   }
+}
+
+await i18nReady;
+i18n.addResourceBundle('en', 'translation', en, true, true);
+await i18n.changeLanguage('en');
+
+const azureLlmDescriptor = {
+  kind: 'llm',
+  providerType: 'azure-openai',
+  labelKey: 'azureOpenai',
+  defaultEndpoint: null,
+  defaultModel: null,
+  authRequirement: 'api_key',
+  validationProbe: 'llm_text',
+  staticModels: [],
+  defaultRequestFormat: 'chat_completions',
+  supportedRequestFormats: ['chat_completions', 'responses'],
+  supportsModelListing: false,
+  supportsThinking: false,
+} satisfies ProviderDescriptor;
+
+const azureAsrDescriptor = {
+  kind: 'asr',
+  providerType: 'azure-openai',
+  labelKey: 'azureOpenai',
+  defaultEndpoint: null,
+  defaultModel: null,
+  authRequirement: 'api_key',
+  validationProbe: 'asr_silence',
+  staticModels: [],
+  defaultRequestFormat: null,
+  supportedRequestFormats: [],
+  supportsModelListing: false,
+  supportsThinking: false,
+} satisfies ProviderDescriptor;
+
+const renderChannelFields = (
+  kind: 'llm' | 'asr',
+  descriptor: ProviderDescriptor,
+  providerType = 'azure-openai',
+) =>
+  renderToStaticMarkup(
+    React.createElement(
+      HotkeySettingsProvider,
+      null,
+      React.createElement(ChannelCredentialFields, {
+        kind,
+        providerType,
+        channelId: `test-${kind}-azure`,
+        descriptor,
+      }),
+    ),
+  );
+
+const originalConsoleError = console.error;
+console.error = (...args: unknown[]) => {
+  if (String(args[0]).includes('useLayoutEffect does nothing on the server')) return;
+  originalConsoleError(...args);
+};
+
+const azureLlmMarkup = renderChannelFields('llm', azureLlmDescriptor);
+for (const expected of [
+  'Deployment name',
+  'Enter your Azure deployment name, which may differ from the model name.',
+  'Enter an Azure deployment name manually; model discovery is not available.',
+  'Azure uses deployment defaults for model-specific reasoning settings.',
+]) {
+  if (!azureLlmMarkup.includes(expected)) {
+    throw new Error(`Azure LLM settings markup is missing: ${expected}`);
+  }
+}
+for (const forbidden of ['Messages', 'Fetch models', 'Thinking mode', 'Some models can only']) {
+  if (azureLlmMarkup.includes(forbidden)) {
+    throw new Error(`Azure LLM settings markup must not include: ${forbidden}`);
+  }
+}
+
+const azureAsrMarkup = renderChannelFields('asr', azureAsrDescriptor);
+for (const markup of [azureLlmMarkup, azureAsrMarkup]) {
+  if (markup.includes('fetch and select a model from your provider')) {
+    throw new Error('Azure deployment guidance must not advertise model discovery');
+  }
+}
+for (const expected of [
+  'Deployment name',
+  'Enter your Azure deployment name, which may differ from the model name.',
+  'Azure API version',
+  'Required for transcription. Use an API version supported by your deployment.',
+  'Audio is transcribed after recording stops. This is Azure OpenAI, not Azure AI Speech.',
+  'Enter an Azure deployment name manually; model discovery is not available.',
+]) {
+  if (!azureAsrMarkup.includes(expected)) {
+    throw new Error(`Azure ASR settings markup is missing: ${expected}`);
+  }
+}
+if (azureAsrMarkup.includes('Fetch models')) {
+  throw new Error('Azure ASR settings markup must not offer model discovery');
+}
+console.error = originalConsoleError;
+
+if (azureApiVersionValidationError('') !== 'azureApiVersionRequired') {
+  throw new Error('Azure API version validator must require non-empty values');
+}
+if (azureApiVersionValidationError('   ') !== 'azureApiVersionRequired') {
+  throw new Error('Azure API version validator must trim blank values');
+}
+if (azureApiVersionValidationError('2024-10-21') !== null) {
+  throw new Error('Azure API version validator must accept stable YYYY-MM-DD values');
+}
+if (azureApiVersionValidationError(' 2024-10-21-preview ') !== null) {
+  throw new Error('Azure API version validator must accept trimmed preview values');
+}
+if (azureApiVersionValidationError('2024-10-preview') !== 'azureApiVersionInvalid') {
+  throw new Error('Azure API version validator must reject malformed values');
+}
+
+await setCredential(AZURE_ASR_API_VERSION_ACCOUNT, '2024-10-21', 'azure-asr-version-test');
+if (
+  (await readCredential(AZURE_ASR_API_VERSION_ACCOUNT, 'azure-asr-version-test')) !== '2024-10-21'
+) {
+  throw new Error('Azure ASR API version must persist in the channel-scoped credential slot');
+}
+await setCredential(AZURE_ASR_API_VERSION_ACCOUNT, '', 'azure-asr-version-test');
+if ((await readCredential(AZURE_ASR_API_VERSION_ACCOUNT, 'azure-asr-version-test')) !== '') {
+  throw new Error('Azure ASR API version removal must use the same channel-scoped credential slot');
+}
+
+const azureOrcaRouterDescriptor = {
+  ...azureLlmDescriptor,
+  providerType: 'orcarouter',
+  labelKey: 'orcarouter',
+  supportsModelListing: true,
+  defaultEndpoint: 'https://orcarouter.example/v1',
+  defaultModel: 'model-x',
+} satisfies ProviderDescriptor;
+
+const orcaRouterMarkup = renderChannelFields('llm', azureOrcaRouterDescriptor, 'orcarouter');
+if (orcaRouterMarkup.includes('Fetch models')) {
+  throw new Error('OrcaRouter settings markup must not offer fetch models');
 }

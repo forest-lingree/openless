@@ -31,6 +31,8 @@ static USE_SYSTEM_PROXY: AtomicBool = AtomicBool::new(true);
 /// 代理开关变化时整表清空重建，保证「存盘即生效」。
 static CACHE: Lazy<Mutex<HashMap<(u64, bool), reqwest::Client>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static TIMED_CREDENTIAL_CACHE: Lazy<Mutex<HashMap<(u64, bool), reqwest::Client>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// 当前是否使用系统代理（false = 所有请求直连）。
 pub fn use_system_proxy() -> bool {
@@ -42,6 +44,7 @@ pub fn use_system_proxy() -> bool {
 pub fn set_use_system_proxy(enabled: bool) {
     USE_SYSTEM_PROXY.store(enabled, Ordering::Relaxed);
     CACHE.lock().clear();
+    TIMED_CREDENTIAL_CACHE.lock().clear();
 }
 
 /// 判定某 base_url 是否应绕过系统代理：回环地址恒绕过（localhost 走代理没有
@@ -110,6 +113,24 @@ pub fn credential_http_for_url(base_url: &str) -> reqwest::Client {
             .build()
             .expect("build no-redirect credential HTTP client")
     })
+}
+
+/// No-redirect credential client with a request hard cap, cached separately
+/// from redirect-following provider clients so secret-bearing requests never
+/// share a cache slot with clients allowed to follow redirects.
+pub fn credential_http_for_url_with_timeout(base_url: &str, timeout_secs: u64) -> reqwest::Client {
+    let no_proxy = should_bypass_proxy(base_url, use_system_proxy());
+    TIMED_CREDENTIAL_CACHE
+        .lock()
+        .entry((timeout_secs, no_proxy))
+        .or_insert_with(|| {
+            base_client_builder(no_proxy)
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(timeout_secs))
+                .build()
+                .expect("build timed no-redirect credential HTTP client")
+        })
+        .clone()
 }
 
 /// Anonymous HTTP client for public endpoints that must fail closed on redirects.

@@ -26,6 +26,7 @@
 - [Android APK / 悬浮窗计划](android-mobile-apk-overlay-plan.md)（实施中）
 - [火山引擎 ASR 配置](volcengine-setup.md)
 - [讯飞（iflytek）ASR 配置](xfyun-asr.md)
+- [Azure OpenAI LLM / ASR 配置](azure-openai-setup.md)
 - [百炼（DashScope）ASR 模型](bailian-asr-models.md)
 - [Tauri CSP 边界](tauri-csp.md)
 - [qwen-asr 子模块升级清单](qwen-asr-submodule-upgrade-checklist.md)

@@ -23,9 +23,10 @@ use crate::asr::{
 use crate::config::{TaskSpawner, TokioTaskSpawner};
 use crate::credentials::{
     CredentialKey, CredentialNamespace, CredentialStore, ASR_ADVANCED_CONFIG_ACCOUNT,
-    ASR_API_KEY_ACCOUNT, ASR_ENDPOINT_ACCOUNT, ASR_MODEL_ACCOUNT, ASR_VOCABULARY_ID_ACCOUNT,
-    LLM_API_KEY_ACCOUNT, LLM_ENDPOINT_ACCOUNT, LLM_EXTRA_HEADERS_ACCOUNT, LLM_TEMPERATURE_ACCOUNT,
-    OMNI_API_KEY_ACCOUNT, OMNI_ENDPOINT_ACCOUNT, OMNI_EXTRA_HEADERS_ACCOUNT, OMNI_MODEL_ACCOUNT,
+    ASR_API_KEY_ACCOUNT, ASR_AZURE_API_VERSION_ACCOUNT, ASR_ENDPOINT_ACCOUNT, ASR_MODEL_ACCOUNT,
+    ASR_VOCABULARY_ID_ACCOUNT, LLM_API_KEY_ACCOUNT, LLM_ENDPOINT_ACCOUNT,
+    LLM_EXTRA_HEADERS_ACCOUNT, LLM_TEMPERATURE_ACCOUNT, OMNI_API_KEY_ACCOUNT,
+    OMNI_ENDPOINT_ACCOUNT, OMNI_EXTRA_HEADERS_ACCOUNT, OMNI_MODEL_ACCOUNT,
     OMNI_TEMPERATURE_ACCOUNT, TENCENT_CLOUD_APP_ID_ACCOUNT, TENCENT_CLOUD_SECRET_ID_ACCOUNT,
     TENCENT_CLOUD_SECRET_KEY_ACCOUNT, VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT,
     VOLCENGINE_APP_KEY_ACCOUNT, VOLCENGINE_AUTH_MODE_ACCOUNT, VOLCENGINE_RESOURCE_ID_ACCOUNT,
@@ -48,6 +49,7 @@ use crate::types::SessionId;
 
 pub const SHARED_CLOUD_ASR_PROVIDER_TYPES: &[&str] = &[
     "volcengine",
+    "azure-openai",
     "elevenlabs",
     "bailian",
     "bailian-qwen3-realtime",
@@ -68,6 +70,7 @@ pub const SHARED_CLOUD_ASR_PROVIDER_TYPES: &[&str] = &[
 
 pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
     "ark",
+    "azure-openai",
     "deepseek",
     "siliconflow",
     "atlascloud",
@@ -126,6 +129,24 @@ enum CloudTranscriptionSessionKind {
     StepfunRealtime(Arc<StepfunRealtimeASR>),
     Xfyun(Arc<XfyunStreamingASR>),
     TencentCloud(Arc<TencentCloudStreamingASR>),
+}
+
+impl std::fmt::Debug for CloudTranscriptionSessionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::Volcengine(_) => "Volcengine",
+            Self::Whisper(_) => "Whisper",
+            Self::Mimo(_) => "Mimo",
+            Self::DashScope(_) => "DashScope",
+            Self::ElevenLabs(_) => "ElevenLabs",
+            Self::Bailian(_) => "Bailian",
+            Self::QwenRealtime(_) => "QwenRealtime",
+            Self::StepfunRealtime(_) => "StepfunRealtime",
+            Self::Xfyun(_) => "Xfyun",
+            Self::TencentCloud(_) => "TencentCloud",
+        };
+        f.write_str(name)
+    }
 }
 
 struct CloudTranscriptionSession {
@@ -516,6 +537,37 @@ async fn build_cloud_transcription_session(
             )
         }
         ActiveAsrProviderKind::WhisperCompatible => {
+            if provider_type == crate::azure_openai::PROVIDER_ID {
+                require_configured(&api_key, "ASR API key")?;
+                let endpoint = non_blank_owned(endpoint)
+                    .ok_or_else(|| credential_missing("Azure OpenAI endpoint"))?;
+                let deployment = non_blank_owned(model)
+                    .ok_or_else(|| credential_missing("Azure OpenAI deployment"))?;
+                let version = read_channel_credential(
+                    credentials,
+                    CredentialNamespace::Asr,
+                    channel_id,
+                    ASR_AZURE_API_VERSION_ACCOUNT,
+                )
+                .await?
+                .and_then(non_blank_owned)
+                .ok_or_else(|| credential_missing("Azure OpenAI API version"))?;
+                let endpoint =
+                    crate::azure_openai::transcription_endpoint(&endpoint, &deployment, &version)?;
+                let provider = WhisperBatchASR::new(
+                    api_key,
+                    endpoint,
+                    deployment.clone(),
+                    context.asr.prompt.clone(),
+                    Some(crate::azure_openai::MAX_CHUNK_DURATION_MS),
+                    false,
+                )
+                .with_azure_openai();
+                return Ok((
+                    CloudTranscriptionSessionKind::Whisper(Arc::new(provider)),
+                    crate::AsrCallLabel::new(effective, Some(deployment)),
+                ));
+            }
             if crate::provider_rules::api_key_required(
                 crate::ProviderKind::Asr,
                 provider_type,
@@ -1260,6 +1312,11 @@ async fn build_cloud_polisher_provider(
     .map(parse_extra_headers)
     .transpose()?
     .unwrap_or_default();
+    let endpoint = if provider_type == crate::azure_openai::PROVIDER_ID {
+        crate::azure_openai::llm_endpoint(&endpoint, protocol.format)?
+    } else {
+        endpoint
+    };
     let config = crate::polish::OpenAICompatibleConfig::new(
         provider_type,
         "OpenLess LLM",
@@ -2058,6 +2115,7 @@ fn build_omni_prompt(context: &DictationContext) -> String {
 mod tests {
     use super::*;
     use crate::{InMemoryCredentialStore, ProviderInvocation, SecretValue};
+    use serde_json::json;
 
     struct ObservedTranslationStream {
         chunks: Mutex<Vec<TextStreamChunk>>,
@@ -2493,6 +2551,33 @@ mod tests {
             .unwrap();
     }
 
+    async fn read_async_http_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+
+        let mut request = Vec::new();
+        let mut buf = [0_u8; 4096];
+        loop {
+            let read = socket.read(&mut buf).await.unwrap();
+            assert_ne!(read, 0);
+            request.extend_from_slice(&buf[..read]);
+            let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end + 4]);
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|length| length.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + length {
+                return request;
+            }
+        }
+    }
+
     #[tokio::test]
     async fn ark_polisher_builder_requires_keys_only_for_official_endpoints() {
         for endpoint in [
@@ -2576,6 +2661,157 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn azure_build_cloud_polisher_provider_normalizes_roots_and_full_operations() {
+        use crate::llm_protocol::LlmRequestFormat;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn assert_case(
+            configured_endpoint: String,
+            expected_request_target: &str,
+            format: LlmRequestFormat,
+        ) {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let endpoint = configured_endpoint.replace("{{ADDR}}", &address.to_string());
+            let expected_request_target =
+                expected_request_target.replace("{{ADDR}}", &address.to_string());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0_u8; 4096];
+                loop {
+                    let read = socket.read(&mut buf).await.unwrap();
+                    assert_ne!(read, 0);
+                    request.extend_from_slice(&buf[..read]);
+                    if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.strip_prefix("content-length:")
+                                    .and_then(|length| length.trim().parse().ok())
+                            })
+                            .unwrap();
+                        if request.len() >= end + 4 + length {
+                            let body: serde_json::Value =
+                                serde_json::from_slice(&request[end + 4..]).unwrap();
+                            assert!(headers.starts_with(&format!(
+                                "post {} ",
+                                expected_request_target.to_ascii_lowercase()
+                            )));
+                            assert_eq!(body["model"], json!("writing-prod"));
+                            assert!(body.get("temperature").is_none());
+                            break;
+                        }
+                    }
+                }
+                let response = match format {
+                    LlmRequestFormat::ChatCompletions => {
+                        json!({"choices":[{"message":{"content":"你好"}}]}).to_string()
+                    }
+                    LlmRequestFormat::Responses => json!({"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"你好"}]}]}).to_string(),
+                    LlmRequestFormat::Messages => unreachable!(),
+                };
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                            response.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            });
+
+            let store = InMemoryCredentialStore::default();
+            write_channel_secret(
+                &store,
+                CredentialNamespace::Llm,
+                "azure-translation",
+                LLM_ENDPOINT_ACCOUNT,
+                &endpoint,
+            )
+            .await;
+            write_channel_secret(
+                &store,
+                CredentialNamespace::Llm,
+                "azure-translation",
+                LLM_API_KEY_ACCOUNT,
+                "fixture-key",
+            )
+            .await;
+            write_channel_secret(
+                &store,
+                CredentialNamespace::Llm,
+                "azure-translation",
+                crate::llm_protocol::REQUEST_FORMAT_ACCOUNT,
+                match format {
+                    LlmRequestFormat::ChatCompletions => "chat_completions",
+                    LlmRequestFormat::Responses => "responses",
+                    LlmRequestFormat::Messages => unreachable!(),
+                },
+            )
+            .await;
+            let mut context = DictationContext {
+                llm: ProviderInvocation::new("azure-translation", "azure-openai"),
+                ..DictationContext::default()
+            };
+            context.llm.model = Some("writing-prod".into());
+            let provider = build_cloud_polisher_provider(&store, &context)
+                .await
+                .unwrap();
+            match provider {
+                CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(
+                    provider,
+                )) => {
+                    assert_eq!(
+                        provider
+                            .translate_to(
+                                "原始语音",
+                                "English",
+                                &[],
+                                crate::shared_types::ChineseScriptPreference::Auto,
+                                crate::shared_types::OutputLanguagePreference::Auto,
+                                None,
+                            )
+                            .await
+                            .unwrap(),
+                        "你好"
+                    );
+                }
+                _ => panic!("azure-openai must build an OpenAI-compatible provider"),
+            }
+            server.await.unwrap();
+        }
+
+        for (format, configured_endpoint, expected_request_target) in [
+            (
+                LlmRequestFormat::ChatCompletions,
+                "http://{{ADDR}}/?tenant=1".to_string(),
+                "/openai/v1/chat/completions?tenant=1".to_string(),
+            ),
+            (
+                LlmRequestFormat::ChatCompletions,
+                "http://{{ADDR}}/openai/v1/chat/completions?tenant=1".to_string(),
+                "/openai/v1/chat/completions?tenant=1".to_string(),
+            ),
+            (
+                LlmRequestFormat::Responses,
+                "http://{{ADDR}}/?tenant=1".to_string(),
+                "/openai/v1/responses?tenant=1".to_string(),
+            ),
+            (
+                LlmRequestFormat::Responses,
+                "http://{{ADDR}}/openai/v1/responses?tenant=1".to_string(),
+                "/openai/v1/responses?tenant=1".to_string(),
+            ),
+        ] {
+            assert_case(configured_endpoint, &expected_request_target, format).await;
+        }
+    }
+
+    #[tokio::test]
     async fn cloud_asr_rejects_unknown_protocol_instead_of_falling_back_to_volcengine() {
         let credentials: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::default());
         let engine = SharedCloudTranscriptionEngine::new(credentials);
@@ -2651,6 +2887,212 @@ mod tests {
             "xiaomi-mimo-asr"
         );
         session.cancel().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_cloud_asr_uses_selected_channel_endpoint_deployment_version_and_key() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_async_http_request(&mut socket).await;
+            let request_text = String::from_utf8_lossy(&request);
+            let lower = request_text.to_ascii_lowercase();
+            assert!(request_text.starts_with(
+                "POST /openai/deployments/selected-deployment/audio/transcriptions?api-version=2025-04-01-preview HTTP/1.1"
+            ));
+            assert!(lower.contains("api-key: selected-secret"));
+            assert!(!lower.contains("authorization:"));
+            assert!(!request_text.contains(r#"name="model""#));
+            let body = r#"{"text":"azure cloud ok"}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+
+        let store = Arc::new(InMemoryCredentialStore::default());
+        for (channel, key, model, version) in [
+            (
+                "selected-channel",
+                "selected-secret",
+                "selected-deployment",
+                "2025-04-01-preview",
+            ),
+            (
+                "other-channel",
+                "other-secret",
+                "other-deployment",
+                "2024-01-01",
+            ),
+        ] {
+            write_channel_secret(
+                store.as_ref(),
+                CredentialNamespace::Asr,
+                channel,
+                ASR_API_KEY_ACCOUNT,
+                key,
+            )
+            .await;
+            write_channel_secret(
+                store.as_ref(),
+                CredentialNamespace::Asr,
+                channel,
+                ASR_ENDPOINT_ACCOUNT,
+                &endpoint,
+            )
+            .await;
+            write_channel_secret(
+                store.as_ref(),
+                CredentialNamespace::Asr,
+                channel,
+                ASR_MODEL_ACCOUNT,
+                model,
+            )
+            .await;
+            write_channel_secret(
+                store.as_ref(),
+                CredentialNamespace::Asr,
+                channel,
+                crate::credentials::ASR_AZURE_API_VERSION_ACCOUNT,
+                version,
+            )
+            .await;
+        }
+
+        let credentials: Arc<dyn CredentialStore> = store;
+        let engine = SharedCloudTranscriptionEngine::new(credentials);
+        let context = DictationContext {
+            asr: ProviderInvocation::new("selected-channel", crate::azure_openai::PROVIDER_ID),
+            ..DictationContext::default()
+        };
+        let session = engine
+            .start(
+                SessionId::new(),
+                Arc::new(context),
+                Arc::new(IgnoreTextStreamSink),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            session.asr_call_label().unwrap().model.as_deref(),
+            Some("selected-deployment")
+        );
+        session.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+        let output = session.finish().await.unwrap();
+
+        assert_eq!(output.text, "azure cloud ok");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_cloud_asr_requires_key_endpoint_deployment_and_version_before_network() {
+        for (api_key, endpoint_set, model, version, expected) in [
+            (
+                None,
+                true,
+                Some("deployment"),
+                Some("2025-04-01-preview"),
+                "ASR API key is not configured",
+            ),
+            (
+                Some("selected-secret"),
+                false,
+                Some("deployment"),
+                Some("2025-04-01-preview"),
+                "Azure OpenAI endpoint is not configured",
+            ),
+            (
+                Some("selected-secret"),
+                true,
+                None,
+                Some("2025-04-01-preview"),
+                "Azure OpenAI deployment is not configured",
+            ),
+            (
+                Some("selected-secret"),
+                true,
+                Some("deployment"),
+                None,
+                "Azure OpenAI API version is not configured",
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let store = InMemoryCredentialStore::default();
+            if let Some(api_key) = api_key {
+                write_channel_secret(
+                    &store,
+                    CredentialNamespace::Asr,
+                    "selected-channel",
+                    ASR_API_KEY_ACCOUNT,
+                    api_key,
+                )
+                .await;
+            }
+            if endpoint_set {
+                write_channel_secret(
+                    &store,
+                    CredentialNamespace::Asr,
+                    "selected-channel",
+                    ASR_ENDPOINT_ACCOUNT,
+                    &endpoint,
+                )
+                .await;
+            }
+            if let Some(model) = model {
+                write_channel_secret(
+                    &store,
+                    CredentialNamespace::Asr,
+                    "selected-channel",
+                    ASR_MODEL_ACCOUNT,
+                    model,
+                )
+                .await;
+            }
+            if let Some(version) = version {
+                write_channel_secret(
+                    &store,
+                    CredentialNamespace::Asr,
+                    "selected-channel",
+                    crate::credentials::ASR_AZURE_API_VERSION_ACCOUNT,
+                    version,
+                )
+                .await;
+            }
+
+            let context = DictationContext {
+                asr: ProviderInvocation::new("selected-channel", crate::azure_openai::PROVIDER_ID),
+                ..DictationContext::default()
+            };
+            let error = build_cloud_transcription_session(
+                &store,
+                &context,
+                Arc::new(TokioTaskSpawner),
+                Arc::new(IgnoreTextStreamSink),
+            )
+            .await
+            .unwrap_err();
+
+            assert_eq!(error.code, BackendErrorCode::Provider);
+            assert_eq!(error.message, expected);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err(),
+                "Azure missing-field validation must not contact the network"
+            );
+        }
     }
 
     #[tokio::test]

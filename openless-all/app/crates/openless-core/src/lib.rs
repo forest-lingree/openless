@@ -10,6 +10,7 @@ pub mod api;
 pub mod asr;
 pub mod audio;
 pub mod auxiliary;
+pub mod azure_openai;
 pub mod cli;
 mod cloud_providers;
 pub mod cloud_sync;

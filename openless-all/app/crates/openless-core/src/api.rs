@@ -3498,13 +3498,12 @@ impl OpenLessBackend {
         key: CredentialKey,
         value: SecretValue,
     ) -> Result<CredentialsStatus, BackendError> {
-        if key.namespace == crate::CredentialNamespace::Llm
-            && crate::llm_protocol::CONFIG_ACCOUNTS.contains(&key.account.as_str())
+        if key.namespace == crate::CredentialNamespace::Asr
+            && key.account == crate::credentials::ASR_AZURE_API_VERSION_ACCOUNT
         {
-            crate::llm_protocol::LlmProtocolConfig::default()
-                .apply(&key.account, value.expose_secret())?;
+            crate::azure_openai::validate_api_version(value.expose_secret())?;
         }
-        let invalidate = if key.namespace == crate::CredentialNamespace::Llm {
+        let llm_channel = if key.namespace == crate::CredentialNamespace::Llm {
             let id = match &key.provider_id {
                 Some(id) => id.clone(),
                 None => {
@@ -3518,10 +3517,24 @@ impl OpenLessBackend {
                 .await?
                 .into_iter()
                 .find(|channel| channel.id == id)
-                .map(|_| id)
         } else {
             None
         };
+        if key.namespace == crate::CredentialNamespace::Llm
+            && crate::llm_protocol::CONFIG_ACCOUNTS.contains(&key.account.as_str())
+        {
+            let mut config = crate::llm_protocol::LlmProtocolConfig::default();
+            config.apply(&key.account, value.expose_secret())?;
+            if key.account == crate::llm_protocol::REQUEST_FORMAT_ACCOUNT {
+                if let Some(channel) = llm_channel.as_ref() {
+                    crate::llm_protocol::validate_provider_format(
+                        &channel.provider_type,
+                        config.format,
+                    )?;
+                }
+            }
+        }
+        let invalidate = llm_channel.map(|channel| channel.id);
         self.deps.credential_store.write(key, value).await?;
         if let Some(id) = invalidate {
             self.deps
@@ -6234,6 +6247,34 @@ mod tests {
         )
     }
 
+    fn backend_with_store(store: Arc<crate::credentials::InMemoryCredentialStore>) -> TestBackend {
+        let data_dir = TestDataDir::new("facade");
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.path().to_path_buf(),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(FakeInserter),
+                dictation_engine: Arc::new(FakeEngine),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                credential_store: store,
+                services: crate::domains::BackendServices::unsupported(),
+                local_asr_runtime: None,
+                marketplace_config: None,
+                selection_runtime: None,
+                selection_polisher: None,
+                qa_runtime: None,
+            },
+        )
+        .unwrap();
+        TestBackend {
+            backend,
+            _data_dir: data_dir,
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn old_cli_completion_cannot_erase_an_accepted_physical_hold_press() {
         use crate::shared_types::{HotkeyMode, ShortcutBinding};
@@ -8578,6 +8619,317 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn azure_llm_protocol_write_rejects_messages_without_persisting_them() {
+        use crate::credentials::{CredentialNamespace, InMemoryCredentialStore, SecretValue};
+        use crate::llm_protocol::*;
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: std::env::temp_dir()
+                    .join(format!("openless-azure-protocol-{}", uuid::Uuid::new_v4())),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(FakeInserter),
+                dictation_engine: Arc::new(FakeEngine),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                credential_store: Arc::new(InMemoryCredentialStore::default()),
+                services: crate::domains::BackendServices::unsupported(),
+                local_asr_runtime: None,
+                marketplace_config: None,
+                selection_runtime: None,
+                selection_polisher: None,
+                qa_runtime: None,
+            },
+        )
+        .unwrap();
+        let azure_id = backend
+            .create_channel(ChannelKind::Llm, "azure-openai".into(), "azure".into())
+            .await
+            .unwrap();
+        let azure_key = |account: &str| {
+            CredentialKey::new(CredentialNamespace::Llm, Some(azure_id.clone()), account).unwrap()
+        };
+
+        backend
+            .set_credential(
+                azure_key(REQUEST_FORMAT_ACCOUNT),
+                SecretValue::new("responses"),
+            )
+            .await
+            .unwrap();
+        let error = backend
+            .set_credential(
+                azure_key(REQUEST_FORMAT_ACCOUNT),
+                SecretValue::new("messages"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+        assert_eq!(error.message, "azureUnsupportedProtocol");
+        assert_eq!(
+            backend
+                .read_credential(azure_key(REQUEST_FORMAT_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "responses"
+        );
+
+        let generic_id = backend
+            .create_channel(ChannelKind::Llm, "custom".into(), "generic".into())
+            .await
+            .unwrap();
+        let generic_key = |account: &str| {
+            CredentialKey::new(CredentialNamespace::Llm, Some(generic_id.clone()), account).unwrap()
+        };
+        backend
+            .set_credential(
+                generic_key(REQUEST_FORMAT_ACCOUNT),
+                SecretValue::new("messages"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .read_credential(generic_key(REQUEST_FORMAT_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn azure_llm_protocol_write_can_repair_imported_messages_with_active_provider_key() {
+        use crate::credentials::{
+            CredentialNamespace, CredentialStore, InMemoryCredentialStore, SecretValue,
+        };
+        use crate::llm_protocol::*;
+
+        let store = Arc::new(InMemoryCredentialStore::default());
+        let backend = backend_with_store(store.clone());
+        let azure_id = backend
+            .create_channel(ChannelKind::Llm, "azure-openai".into(), "azure".into())
+            .await
+            .unwrap();
+        backend
+            .set_active_provider(crate::credentials::ProviderSlot::Llm, azure_id.clone())
+            .await
+            .unwrap();
+
+        let explicit_key = |account: &str| {
+            CredentialKey::new(CredentialNamespace::Llm, Some(azure_id.clone()), account).unwrap()
+        };
+        let active_key =
+            |account: &str| CredentialKey::new(CredentialNamespace::Llm, None, account).unwrap();
+        store
+            .write(
+                explicit_key(REQUEST_FORMAT_ACCOUNT),
+                SecretValue::new("messages"),
+            )
+            .await
+            .unwrap();
+
+        backend
+            .set_credential(
+                active_key(REQUEST_FORMAT_ACCOUNT),
+                SecretValue::new("responses"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            backend
+                .read_credential(active_key(REQUEST_FORMAT_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "responses"
+        );
+        assert_eq!(
+            backend
+                .read_credential(explicit_key(REQUEST_FORMAT_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "messages"
+        );
+
+        let error = backend
+            .set_credential(
+                active_key(REQUEST_FORMAT_ACCOUNT),
+                SecretValue::new("messages"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+        assert_eq!(error.message, "azureUnsupportedProtocol");
+    }
+
+    #[tokio::test]
+    async fn azure_asr_api_version_write_validates_and_preserves_prior_value() {
+        use crate::credentials::{
+            CredentialNamespace, InMemoryCredentialStore, SecretValue,
+            ASR_AZURE_API_VERSION_ACCOUNT,
+        };
+
+        let backend = backend_with_store(Arc::new(InMemoryCredentialStore::default()));
+        let azure_id = backend
+            .create_channel(ChannelKind::Asr, "azure-openai".into(), "azure".into())
+            .await
+            .unwrap();
+        let azure_key = CredentialKey::new(
+            CredentialNamespace::Asr,
+            Some(azure_id.clone()),
+            ASR_AZURE_API_VERSION_ACCOUNT,
+        )
+        .unwrap();
+
+        backend
+            .set_credential(azure_key.clone(), SecretValue::new("2024-10-21"))
+            .await
+            .unwrap();
+        let error = backend
+            .set_credential(azure_key.clone(), SecretValue::new("latest"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+        assert_eq!(error.message, "azureApiVersionInvalid");
+        assert_eq!(
+            backend
+                .read_credential(azure_key)
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "2024-10-21"
+        );
+    }
+
+    #[tokio::test]
+    async fn azure_asr_api_version_write_stays_channel_scoped() {
+        use crate::credentials::{
+            CredentialNamespace, InMemoryCredentialStore, SecretValue,
+            ASR_AZURE_API_VERSION_ACCOUNT,
+        };
+
+        let backend = backend_with_store(Arc::new(InMemoryCredentialStore::default()));
+        let channel_a = backend
+            .create_channel(ChannelKind::Asr, "azure-openai".into(), "azure-a".into())
+            .await
+            .unwrap();
+        let channel_b = backend
+            .create_channel(ChannelKind::Asr, "azure-openai".into(), "azure-b".into())
+            .await
+            .unwrap();
+        let azure_key = |id: &str| {
+            CredentialKey::new(
+                CredentialNamespace::Asr,
+                Some(id.to_string()),
+                ASR_AZURE_API_VERSION_ACCOUNT,
+            )
+            .unwrap()
+        };
+
+        backend
+            .set_credential(azure_key(&channel_a), SecretValue::new("2024-10-21"))
+            .await
+            .unwrap();
+        backend
+            .set_credential(
+                azure_key(&channel_b),
+                SecretValue::new("2025-01-01-preview"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            backend
+                .read_credential(azure_key(&channel_a))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "2024-10-21"
+        );
+        assert_eq!(
+            backend
+                .read_credential(azure_key(&channel_b))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "2025-01-01-preview"
+        );
+    }
+
+    #[tokio::test]
+    async fn llm_protocol_mutations_allow_sequential_max_tokens_and_budget_edits() {
+        use crate::credentials::{CredentialNamespace, InMemoryCredentialStore, SecretValue};
+        use crate::llm_protocol::*;
+
+        let backend = backend_with_store(Arc::new(InMemoryCredentialStore::default()));
+        let id = backend
+            .create_channel(ChannelKind::Llm, "custom".into(), "generic".into())
+            .await
+            .unwrap();
+        let key = |account: &str| {
+            CredentialKey::new(CredentialNamespace::Llm, Some(id.clone()), account).unwrap()
+        };
+
+        backend
+            .set_credential(key(REQUEST_FORMAT_ACCOUNT), SecretValue::new("messages"))
+            .await
+            .unwrap();
+        backend
+            .set_credential(key(MESSAGES_THINKING_ACCOUNT), SecretValue::new("budget"))
+            .await
+            .unwrap();
+        backend
+            .set_credential(key(MAX_TOKENS_ACCOUNT), SecretValue::new("4096"))
+            .await
+            .unwrap();
+        backend
+            .set_credential(key(THINKING_BUDGET_ACCOUNT), SecretValue::new("2048"))
+            .await
+            .unwrap();
+
+        backend
+            .set_credential(key(MAX_TOKENS_ACCOUNT), SecretValue::new("1536"))
+            .await
+            .unwrap();
+        backend
+            .set_credential(key(THINKING_BUDGET_ACCOUNT), SecretValue::new("1024"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            backend
+                .read_credential(key(MAX_TOKENS_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "1536"
+        );
+        assert_eq!(
+            backend
+                .read_credential(key(THINKING_BUDGET_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "1024"
+        );
+    }
+
+    #[tokio::test]
     async fn lifecycle_is_idempotent_and_emits_started_once_per_transition() {
         let (backend, _) = backend();
         let mut events = backend.subscribe();
@@ -8663,7 +9015,10 @@ mod tests {
         )
         .unwrap();
         let first = backend.start().await.expect("first start must not fail");
-        let second = backend.start().await.expect("handshake start must not fail");
+        let second = backend
+            .start()
+            .await
+            .expect("handshake start must not fail");
         assert!(first.backend.running);
         assert!(second.backend.running);
         let _ = data_dir;
