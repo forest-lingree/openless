@@ -1196,6 +1196,7 @@ export const zhTW: typeof zhCN = {
         '兩種模式使用完全獨立的憑證設定。切換模式不會刪除另一套設定，只是暫時停用；切回即恢復。',
       presets: {
         lmstudio: 'LM Studio',
+        agentMaestro: 'Agent Maestro',
         ark: 'ARK（火山方舟）',
         azureOpenai: 'Azure OpenAI',
         deepseek: 'DeepSeek',
@@ -1286,6 +1287,8 @@ export const zhTW: typeof zhCN = {
         '使用騰訊雲「語音辨識」服務的 API 金鑰。預設 Hy-ASR-3.0-preview 支援中英與 20 種方言；Preview 僅支援 60 秒內的 16kHz 單聲道 PCM，暫不支援上下文或熱詞增強。',
       tencentTokenHubNote:
         '僅顯示目前在線的語言模型。部分模型始終啟用思考；關閉思考開關時將沿用該模型的固定行為。',
+      agentMaestroHint:
+        '請保持 VS Code 中的 Agent Maestro 運行並登入 Copilot。取得 Copilot 模型或手動填寫模型 ID；若清單為空，請檢查 Copilot 模型權限。API Key 為可選；若伺服器端已設定，請在此填入相同的 Key。生成參數沿用 Copilot 預設值。',
       localAsrActiveNotice: '當前已啓用「{{name}}」，可在「高級」中切換或停用。',
       localAsrTakeoverHint: '啓動「{{name}}」後，ASR 提供商將被接管。',
       asrProviderTakenOver:
@@ -1383,6 +1386,8 @@ export const zhTW: typeof zhCN = {
         '允許使用 HTTP Endpoint，但請注意：API Key 和音訊內容可能在傳輸中外洩。',
       endpointHttpWarning: '允許使用 HTTP Endpoint，但請注意：API Key 和請求內容可能在傳輸中外洩。',
       endpointInvalid: 'Endpoint 格式不合法。',
+      agentMaestroEndpointInvalid:
+        '請填寫以 /api/openai/v1 結尾的 HTTP(S) Base URL，也可附加 /chat/completions。',
       bailianEndpointSchemeInvalid:
         '百煉即時 ASR 走 DashScope WebSocket 閘道，接口地址必須以 wss:// 開頭（預設 wss://dashscope.aliyuncs.com/api-ws/v1/inference/）；https:// 的相容模式地址在此不可用。',
       qwen3EndpointSchemeInvalid:
@@ -1394,6 +1399,8 @@ export const zhTW: typeof zhCN = {
       endpointMissing: 'Endpoint 爲空。',
       volcengineAppIdMissing: 'APP ID 爲空。',
       volcengineAccessTokenMissing: 'Access Token 爲空。',
+      agentMaestroModelsInvalid:
+        'Agent Maestro 回傳的模型清單格式無效，請檢查 API 位址與伺服器版本。',
       requestTimeout: '請求超時，請稍後重試。',
     },
     shortcuts: {

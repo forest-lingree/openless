@@ -1,5 +1,6 @@
-import React from 'react';
+import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { listProviderDescriptors } from '../../lib/ipc/providers';
 import i18n, { i18nReady } from '../../i18n';
 import { en } from '../../i18n/en';
 import { HotkeySettingsProvider } from '../../state/HotkeySettingsContext';
@@ -21,6 +22,9 @@ import {
 import type { ProviderDescriptor } from '../../lib/ipc';
 
 const atlascloudPreset = LLM_LABELS.find((p) => p.id === 'atlascloud');
+if (LLM_LABELS.find((p) => p.id === 'agent-maestro')?.nameKey !== 'agentMaestro') {
+  throw new Error('Agent Maestro LLM label is missing');
+}
 if (LLM_LABELS.find((p) => p.id === 'opencode')?.nameKey !== 'opencode') {
   throw new Error('OpenCode LLM label is missing');
 }
@@ -169,10 +173,10 @@ const renderChannelFields = (
   providerType = 'azure-openai',
 ) =>
   renderToStaticMarkup(
-    React.createElement(
+    createElement(
       HotkeySettingsProvider,
       null,
-      React.createElement(ChannelCredentialFields, {
+      createElement(ChannelCredentialFields, {
         kind,
         providerType,
         channelId: `test-${kind}-azure`,
@@ -266,4 +270,42 @@ const azureOrcaRouterDescriptor = {
 const orcaRouterMarkup = renderChannelFields('llm', azureOrcaRouterDescriptor, 'orcarouter');
 if (orcaRouterMarkup.includes('Fetch models')) {
   throw new Error('OrcaRouter settings markup must not offer fetch models');
+}
+
+const llmDescriptors = await listProviderDescriptors('llm');
+const agentMaestro = llmDescriptors.find(
+  (descriptor) => descriptor.providerType === 'agent-maestro',
+);
+const lmstudio = llmDescriptors.find((descriptor) => descriptor.providerType === 'lmstudio');
+if (!agentMaestro || !lmstudio) throw new Error('Expected LLM descriptors are missing');
+
+function renderChannelCredentialFields(
+  providerType: string,
+  descriptor: NonNullable<typeof agentMaestro>,
+) {
+  return renderToStaticMarkup(
+    createElement(HotkeySettingsProvider, {
+      children: createElement(ChannelCredentialFields, {
+        kind: 'llm',
+        providerType,
+        channelId: 'render-fixture',
+        descriptor,
+      }),
+    }),
+  );
+}
+
+const maestroMarkup = renderChannelCredentialFields('agent-maestro', agentMaestro);
+const lmstudioMarkup = renderChannelCredentialFields('lmstudio', lmstudio);
+if (!maestroMarkup.includes(i18n.t('settings.providers.agentMaestroHint'))) {
+  throw new Error('Agent Maestro operational help should render before the fields');
+}
+if (maestroMarkup.includes(i18n.t('settings.providers.thinkingModeLabel'))) {
+  throw new Error('Agent Maestro should hide the thinking toggle');
+}
+if (!lmstudioMarkup.includes(i18n.t('settings.providers.thinkingModeLabel'))) {
+  throw new Error('LM Studio should keep the thinking toggle');
+}
+if (maestroMarkup.includes(i18n.t('settings.providers.requestFormatLabel'))) {
+  throw new Error('Agent Maestro should not render the protocol selector');
 }

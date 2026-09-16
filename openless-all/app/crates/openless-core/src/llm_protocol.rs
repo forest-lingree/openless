@@ -41,7 +41,11 @@ impl LlmRequestFormat {
     pub fn selectable(provider: &str) -> bool {
         !matches!(
             provider,
-            "gemini" | "codex_oauth" | "tencentTokenHub" | "lmstudio"
+            "gemini"
+                | "codex_oauth"
+                | "tencentTokenHub"
+                | "lmstudio"
+                | crate::agent_maestro::PROVIDER_ID
         )
     }
 
@@ -638,6 +642,33 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, BackendErrorCode::InvalidArgument);
         assert_eq!(error.message, "azureUnsupportedProtocol");
+    }
+
+    #[tokio::test]
+    async fn agent_maestro_ignores_stored_request_format_overrides() {
+        let store = InMemoryCredentialStore::default();
+        let key = CredentialKey::new(
+            CredentialNamespace::Llm,
+            Some("agent-maestro-channel".into()),
+            REQUEST_FORMAT_ACCOUNT,
+        )
+        .unwrap();
+
+        assert!(!LlmRequestFormat::selectable(crate::agent_maestro::PROVIDER_ID));
+        for value in ["responses", "messages", "invalid"] {
+            store.write(key.clone(), SecretValue::new(value)).await.unwrap();
+            assert_eq!(
+                LlmProtocolConfig::load(
+                    &store,
+                    "agent-maestro-channel",
+                    crate::agent_maestro::PROVIDER_ID
+                )
+                .await
+                .unwrap()
+                .format,
+                LlmRequestFormat::ChatCompletions
+            );
+        }
     }
 
     #[test]

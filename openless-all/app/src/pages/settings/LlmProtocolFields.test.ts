@@ -95,6 +95,7 @@ for (const id of ['opencode', 'custom', 'custom_responses', 'custom_messages']) 
 }
 const tokenhub = presets.find((p) => p.id === 'tencentTokenHub');
 const lmstudio = presets.find((p) => p.id === 'lmstudio');
+const agentMaestro = presets.find((p) => p.id === 'agent-maestro');
 assert(
   lmstudio &&
     lmstudio.defaultEndpoint === 'http://localhost:1234/v1' &&
@@ -105,8 +106,21 @@ assert(
   'LM Studio must allow a custom endpoint and optional key with fixed Chat Completions',
 );
 assert(
+  agentMaestro &&
+    agentMaestro.defaultEndpoint === 'http://127.0.0.1:23333/api/openai/v1' &&
+    agentMaestro.defaultModel === undefined &&
+    agentMaestro.authRequirement === 'endpoint_model_optional_api_key' &&
+    agentMaestro.defaultRequestFormat == null &&
+    agentMaestro.supportedRequestFormats?.length === 0,
+  'Agent Maestro must allow manual or fetched Copilot models with an optional key and fixed Chat Completions',
+);
+assert(
   !(await listProviderDescriptors('omni')).some((item) => item.providerType === 'lmstudio'),
   'LM Studio preset is limited to LLM channels',
+);
+assert(
+  !(await listProviderDescriptors('omni')).some((item) => item.providerType === 'agent-maestro'),
+  'Agent Maestro preset is limited to LLM channels',
 );
 assert(
   tokenhub &&
@@ -188,6 +202,27 @@ for (const [account, expected] of [
     `Switching to LM Studio must preserve credentials and clear the protocol override: ${account}`,
   );
 }
+const maestroFirst = await createChannel('llm', 'agent-maestro', 'maestro-first');
+const maestroSecond = await createChannel('llm', 'agent-maestro', 'maestro-second');
+await setCredential('ark.endpoint', 'http://127.0.0.1:24444/api/openai/v1', maestroFirst);
+await setCredential('ark.model_id', 'copilot/gpt-4.1', maestroFirst);
+await setCredential('ark.model_id', 'copilot/o3', maestroSecond);
+assert(
+  (await readCredential('ark.endpoint', maestroFirst)) === 'http://127.0.0.1:24444/api/openai/v1',
+  'Agent Maestro custom endpoint must persist on its own channel',
+);
+assert(
+  (await readCredential('ark.model_id', maestroFirst)) === 'copilot/gpt-4.1',
+  'Agent Maestro manual model must persist on the first channel',
+);
+assert(
+  (await readCredential('ark.model_id', maestroSecond)) === 'copilot/o3',
+  'Agent Maestro manual model must persist on the second channel',
+);
+assert(
+  (await readCredential('ark.endpoint', maestroSecond)) === null,
+  'Agent Maestro endpoint overrides must stay scoped by channel',
+);
 await recordChannelTest('llm', first, true, 1, null);
 const settings = await getSettings();
 const asrTestAt = (await listChannels('asr'))[0].lastTest?.at;
@@ -219,5 +254,7 @@ assert(
   'A configured browser draft must remain visible',
 );
 await deleteChannel('llm', configured);
+await deleteChannel('llm', maestroFirst);
+await deleteChannel('llm', maestroSecond);
 await deleteChannel('llm', first);
 await deleteChannel('llm', second);

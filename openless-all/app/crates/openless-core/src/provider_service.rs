@@ -324,6 +324,9 @@ impl ProviderService {
         request: ProviderRequest,
         cancellation: ProviderCancellation,
     ) -> Result<ProviderModelsResult, BackendError> {
+        if cancellation.is_cancelled() {
+            return Err(cancelled_request());
+        }
         let resolved = self.resolve(request).await?;
         ensure_supported_kind(&resolved)?;
         if provider_descriptor(resolved.kind, &resolved.provider_type)
@@ -508,7 +511,13 @@ fn validate_configuration(
             return Err(provider_error("provider endpoint is not configured"));
         }
         if let Some(endpoint) = endpoint {
-            validate_provider_endpoint(endpoint, resolved.kind == ProviderKind::Asr)?;
+            if resolved.kind == ProviderKind::Llm
+                && resolved.provider_type == crate::agent_maestro::PROVIDER_ID
+            {
+                crate::agent_maestro::validate_endpoint(endpoint)?;
+            } else {
+                validate_provider_endpoint(endpoint, resolved.kind == ProviderKind::Asr)?;
+            }
         }
         if let Some(headers) = resolved.extra_headers.as_deref() {
             resolved
@@ -700,7 +709,13 @@ async fn fetch_models(
             ProviderKind::Omni => default_omni_endpoint(&resolved.provider_type),
         })
         .ok_or_else(|| provider_error("provider endpoint is not configured"))?;
-    let url = models_url(endpoint)?;
+    let is_agent_maestro =
+        resolved.kind == ProviderKind::Llm && resolved.provider_type == crate::agent_maestro::PROVIDER_ID;
+    let url = if is_agent_maestro {
+        crate::agent_maestro::models_url(endpoint)?
+    } else {
+        models_url(endpoint)?
+    };
     let is_gemini = resolved.provider_type == "gemini";
     let tokenhub_chat_only = resolved.provider_type == "tencentTokenHub";
     let orcarouter_filter = (resolved.provider_type == "orcarouter").then(|| {
@@ -748,11 +763,12 @@ async fn fetch_models(
                 headers: request_headers,
                 timeout: MODEL_LIST_TIMEOUT,
                 max_response_bytes: MODEL_LIST_MAX_BYTES,
+                use_endpoint_proxy_policy: is_agent_maestro,
             },
             cancellation,
         )
         .await
-        .map_err(map_transport_error)?;
+        .map_err(|error| map_model_list_transport_error(error, is_agent_maestro))?;
     if !(200..300).contains(&response.status) {
         return Err(BackendError::new(
             BackendErrorCode::Provider,
@@ -760,7 +776,10 @@ async fn fetch_models(
         ));
     }
     if response.body.len() > MODEL_LIST_MAX_BYTES {
-        return Err(provider_error("provider model response is too large"));
+        return Err(model_list_too_large_error(is_agent_maestro));
+    }
+    if is_agent_maestro {
+        return crate::agent_maestro::parse_models(&response.body);
     }
     parse_model_list(
         &response.body,
@@ -866,6 +885,34 @@ fn parse_model_list(
 fn models_url(endpoint: &str) -> Result<String, BackendError> {
     crate::llm_protocol::endpoint_url(endpoint, "/models")
         .map_err(|_| invalid_request("provider endpoint is invalid"))
+}
+
+fn map_model_list_transport_error(
+    error: ProviderTransportError,
+    is_agent_maestro: bool,
+) -> BackendError {
+    if !is_agent_maestro || error == ProviderTransportError::Cancelled {
+        return map_transport_error(error);
+    }
+    match error {
+        ProviderTransportError::Timeout => {
+            provider_error("providerRequestTimeout").retryable(true)
+        }
+        ProviderTransportError::Connection => {
+            provider_error("providerNetworkError").retryable(true)
+        }
+        ProviderTransportError::Request => provider_error("providerReadResponseFailed"),
+        ProviderTransportError::ResponseTooLarge => provider_error("providerResponseTooLarge"),
+        ProviderTransportError::Cancelled => map_transport_error(error),
+    }
+}
+
+fn model_list_too_large_error(is_agent_maestro: bool) -> BackendError {
+    if is_agent_maestro {
+        provider_error("providerResponseTooLarge")
+    } else {
+        provider_error("provider model response is too large")
+    }
 }
 
 fn map_transport_error(error: ProviderTransportError) -> BackendError {
@@ -2228,6 +2275,32 @@ mod tests {
         (service, transport, id)
     }
 
+    async fn service_with_agent_maestro_fake_transport(
+        values: &[(&str, &str)],
+    ) -> (
+        ProviderService,
+        Arc<FakeProviderTransport>,
+        Arc<InMemoryCredentialStore>,
+        String,
+    ) {
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let channel = create_channel_with_values(
+            &credentials,
+            ChannelKind::Llm,
+            crate::agent_maestro::PROVIDER_ID,
+            values,
+        )
+        .await;
+        let transport = Arc::new(FakeProviderTransport::default());
+        let credential_store: Arc<dyn CredentialStore> = credentials.clone();
+        let service = ProviderService::new_with_transport(
+            credential_store,
+            Arc::new(crate::TokioTaskSpawner),
+            transport.clone(),
+        );
+        (service, transport, credentials, channel)
+    }
+
     #[tokio::test]
     async fn fake_transport_parses_models_and_redacts_request_debug() {
         let (service, transport, channel) = service_with_fake_transport().await;
@@ -2257,14 +2330,344 @@ mod tests {
             .headers
             .iter()
             .any(|(name, value)| name == "x-tenant" && value == "header-secret"));
+        assert!(!request.use_endpoint_proxy_policy);
         let debug = format!("{request:?}");
         for secret in ["provider-secret", "header-secret", "url-secret"] {
             assert!(!debug.contains(secret), "transport debug leaked {secret}");
         }
+        assert!(debug.contains("use_endpoint_proxy_policy: false"));
         assert_eq!(
             request.url,
             "https://example.test/v1/models?token=url-secret"
         );
+    }
+
+    #[tokio::test]
+    async fn agent_maestro_discovery_uses_its_route_and_optional_key_without_model() {
+        for api_key in ["", "fixture-key"] {
+            let (service, transport, credentials, channel) =
+                service_with_agent_maestro_fake_transport(&[
+                    (
+                        LLM_ENDPOINT_ACCOUNT,
+                        "http://localhost:24444/bridge/api/openai/v1?tenant=1",
+                    ),
+                    (LLM_API_KEY_ACCOUNT, api_key),
+                ])
+                .await;
+            transport.push_response(
+                200,
+                br#"[{"id":"b","vendor":"copilot"},{"id":"a","vendor":"copilot"},{"id":"x","vendor":"other"}]"#,
+            );
+            let request = ProviderRequest {
+                thinking_enabled: false,
+                kind: ProviderKind::Llm,
+                channel_id: Some(channel.clone()),
+            };
+
+            assert_eq!(
+                service
+                    .read(CredentialNamespace::Llm, &channel, LLM_MODEL_ACCOUNT)
+                    .await
+                    .unwrap(),
+                None
+            );
+
+            let result = service.list_models(request.clone()).await.unwrap();
+            assert_eq!(result.models, vec!["a", "b"]);
+
+            let error = service.validate(request).await.unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+            assert_eq!(error.message, "provider model is not configured");
+
+            assert_eq!(
+                credentials
+                    .read(
+                        CredentialKey::new(
+                            CredentialNamespace::Llm,
+                            Some(channel.clone()),
+                            LLM_MODEL_ACCOUNT,
+                        )
+                        .unwrap(),
+                    )
+                    .await
+                    .unwrap(),
+                None
+            );
+
+            let requests = transport.requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(
+                requests[0].url,
+                "http://localhost:24444/bridge/api/v1/lm/chatModels?tenant=1"
+            );
+            assert_eq!(requests[0].timeout, MODEL_LIST_TIMEOUT);
+            assert_eq!(requests[0].max_response_bytes, MODEL_LIST_MAX_BYTES);
+            assert!(requests[0].use_endpoint_proxy_policy);
+            if api_key.is_empty() {
+                assert!(!requests[0]
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("authorization")));
+            } else {
+                assert_eq!(
+                    requests[0].headers,
+                    vec![(
+                        "Authorization".to_string(),
+                        "Bearer fixture-key".to_string()
+                    )]
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_maestro_discovery_reports_failures_and_preserves_saved_model() {
+        let (service, transport, credentials, channel) =
+            service_with_agent_maestro_fake_transport(&[(LLM_MODEL_ACCOUNT, "saved-model")]).await;
+
+        for (status, expected) in [
+            (302, "providerHttpStatus:302"),
+            (401, "providerHttpStatus:401"),
+            (403, "providerHttpStatus:403"),
+            (429, "providerHttpStatus:429"),
+            (500, "providerHttpStatus:500"),
+        ] {
+            transport.push_response(status, br#"{"error":"secret-body"}"#);
+            let error = service
+                .list_models(ProviderRequest {
+                    thinking_enabled: false,
+                    kind: ProviderKind::Llm,
+                    channel_id: Some(channel.clone()),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::Provider);
+            assert_eq!(error.message, expected);
+            assert!(!error.retryable);
+            assert!(!format!("{error:?}").contains("secret-body"));
+        }
+
+        for (transport_error, expected, retryable) in [
+            (
+                ProviderTransportError::Timeout,
+                "providerRequestTimeout",
+                true,
+            ),
+            (
+                ProviderTransportError::Connection,
+                "providerNetworkError",
+                true,
+            ),
+            (
+                ProviderTransportError::ResponseTooLarge,
+                "providerResponseTooLarge",
+                false,
+            ),
+            (
+                ProviderTransportError::Request,
+                "providerReadResponseFailed",
+                false,
+            ),
+        ] {
+            transport.push_error(transport_error);
+            let error = service
+                .list_models(ProviderRequest {
+                    thinking_enabled: false,
+                    kind: ProviderKind::Llm,
+                    channel_id: Some(channel.clone()),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::Provider);
+            assert_eq!(error.message, expected);
+            assert_eq!(error.retryable, retryable);
+        }
+
+        transport.push_error(ProviderTransportError::Cancelled);
+        let error = service
+            .list_models(ProviderRequest {
+                thinking_enabled: false,
+                kind: ProviderKind::Llm,
+                channel_id: Some(channel.clone()),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Cancelled);
+        assert_eq!(error.message, "provider request cancelled");
+        assert!(!error.retryable);
+
+        transport.push_response(200, br#"not-json secret-body"#);
+        let error = service
+            .list_models(ProviderRequest {
+                thinking_enabled: false,
+                kind: ProviderKind::Llm,
+                channel_id: Some(channel.clone()),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Provider);
+        assert_eq!(error.message, "agentMaestroModelsInvalid");
+        assert!(!format!("{error:?}").contains("secret-body"));
+
+        transport.push_response(200, vec![b'x'; MODEL_LIST_MAX_BYTES + 1]);
+        let error = service
+            .list_models(ProviderRequest {
+                thinking_enabled: false,
+                kind: ProviderKind::Llm,
+                channel_id: Some(channel.clone()),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Provider);
+        assert_eq!(error.message, "providerResponseTooLarge");
+
+        transport.push_response(200, br#"[]"#);
+        let result = service
+            .list_models(ProviderRequest {
+                thinking_enabled: false,
+                kind: ProviderKind::Llm,
+                channel_id: Some(channel.clone()),
+            })
+            .await
+            .unwrap();
+        assert!(result.models.is_empty());
+
+        let cancellation = ProviderCancellation::new();
+        cancellation.cancel();
+        let request_count = transport.requests().len();
+        let error = service
+            .list_models_with_cancellation(
+                ProviderRequest {
+                    thinking_enabled: false,
+                    kind: ProviderKind::Llm,
+                    channel_id: Some(channel.clone()),
+                },
+                cancellation,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Cancelled);
+        assert_eq!(transport.requests().len(), request_count);
+
+        assert_eq!(
+            credentials
+                .read(
+                    CredentialKey::new(
+                        CredentialNamespace::Llm,
+                        Some(channel.clone()),
+                        LLM_MODEL_ACCOUNT,
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap()
+                .as_ref()
+                .map(SecretValue::expose_secret),
+            Some("saved-model")
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_maestro_discovery_and_validation_use_local_http_routes() {
+        for api_key in ["", "fixture-key"] {
+            let (models_endpoint, models_request) = spawn_http_response(
+                "200 OK",
+                "application/json",
+                r#"[{"id":"fixture","vendor":"copilot"}]"#,
+            );
+            let models_origin = models_endpoint.strip_suffix("/v1").unwrap();
+            let discovery_endpoint = format!("{models_origin}/api/openai/v1");
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let mut values = vec![
+                (LLM_ENDPOINT_ACCOUNT, discovery_endpoint.as_str()),
+                (LLM_MODEL_ACCOUNT, "fixture"),
+            ];
+            if !api_key.is_empty() {
+                values.push((LLM_API_KEY_ACCOUNT, api_key));
+            }
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Llm,
+                crate::agent_maestro::PROVIDER_ID,
+                &values,
+            )
+            .await;
+            let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+
+            let result = service
+                .list_models(ProviderRequest {
+                    kind: ProviderKind::Llm,
+                    channel_id: Some(channel.clone()),
+                    thinking_enabled: false,
+                })
+                .await
+                .unwrap();
+            assert_eq!(result.models, vec!["fixture"]);
+
+            let request =
+                String::from_utf8(models_request.recv_timeout(Duration::from_secs(2)).unwrap())
+                    .unwrap();
+            assert!(request.starts_with("GET /api/v1/lm/chatModels "));
+            assert_eq!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer fixture-key"),
+                !api_key.is_empty()
+            );
+
+            let (validate_endpoint, validate_request) = spawn_http_response(
+                "200 OK",
+                "text/event-stream",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
+            );
+            let validate_origin = validate_endpoint.strip_suffix("/v1").unwrap();
+            let validation_endpoint = format!("{validate_origin}/api/openai/v1");
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let mut values = vec![
+                (LLM_ENDPOINT_ACCOUNT, validation_endpoint.as_str()),
+                (LLM_MODEL_ACCOUNT, "fixture"),
+            ];
+            if !api_key.is_empty() {
+                values.push((LLM_API_KEY_ACCOUNT, api_key));
+            }
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Llm,
+                crate::agent_maestro::PROVIDER_ID,
+                &values,
+            )
+            .await;
+            let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));
+
+            service
+                .validate(ProviderRequest {
+                    kind: ProviderKind::Llm,
+                    channel_id: Some(channel),
+                    thinking_enabled: false,
+                })
+                .await
+                .unwrap();
+
+            let request = String::from_utf8(
+                validate_request
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(request.starts_with("POST /api/openai/v1/chat/completions "));
+            let (headers, body) = request.split_once("\r\n\r\n").unwrap();
+            assert_eq!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer fixture-key"),
+                !api_key.is_empty()
+            );
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body["model"], "fixture");
+            assert_eq!(body["stream"], true);
+            assert!(body.get("temperature").is_none());
+            assert!(body.get("reasoning_effort").is_none());
+        }
     }
 
     #[tokio::test]
@@ -2375,7 +2778,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, BackendErrorCode::Cancelled);
-        assert_eq!(transport.requests().len(), 1);
+        assert_eq!(transport.requests().len(), 0);
     }
 
     #[tokio::test]

@@ -278,6 +278,20 @@
     "validationProbe": "llm_text"
   },
   {
+    "authRequirement": "endpoint_model_optional_api_key",
+    "defaultEndpoint": "http://127.0.0.1:23333/api/openai/v1",
+    "defaultModel": null,
+    "defaultRequestFormat": null,
+    "kind": "llm",
+    "labelKey": "agentMaestro",
+    "providerType": "agent-maestro",
+    "staticModels": [],
+    "supportedRequestFormats": [],
+    "supportsModelListing": true,
+    "supportsThinking": true,
+    "validationProbe": "llm_text"
+  },
+  {
     "authRequirement": "api_key_unless_custom_endpoint",
     "defaultEndpoint": null,
     "defaultModel": null,

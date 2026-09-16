@@ -22,6 +22,7 @@ pub struct ProviderTransportRequest {
     pub headers: Vec<(String, String)>,
     pub timeout: Duration,
     pub max_response_bytes: usize,
+    pub use_endpoint_proxy_policy: bool,
 }
 
 impl fmt::Debug for ProviderTransportRequest {
@@ -37,6 +38,7 @@ impl fmt::Debug for ProviderTransportRequest {
             .field("header_names", &header_names)
             .field("timeout", &self.timeout)
             .field("max_response_bytes", &self.max_response_bytes)
+            .field("use_endpoint_proxy_policy", &self.use_endpoint_proxy_policy)
             .finish()
     }
 }
@@ -131,7 +133,11 @@ impl ProviderTransport for ReqwestProviderTransport {
             if cancellation.is_cancelled() {
                 return Err(ProviderTransportError::Cancelled);
             }
-            let client = crate::net::credential_http();
+            let client = if request.use_endpoint_proxy_policy {
+                crate::net::credential_http_for_url(&request.url)
+            } else {
+                crate::net::credential_http()
+            };
             let mut builder = client.get(&request.url).timeout(request.timeout);
             for (name, value) in request.headers {
                 builder = builder.header(name, value);

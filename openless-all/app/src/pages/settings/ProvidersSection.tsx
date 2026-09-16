@@ -146,6 +146,7 @@ export const LLM_LABELS = [
   ['opencode', 'opencode'],
   ['tencentTokenHub', 'tencentTokenHub'],
   ['lmstudio', 'lmstudio'],
+  ['agent-maestro', 'agentMaestro'],
   ['custom', 'customChatCompletions'],
   ['custom_responses', 'customResponses'],
   ['custom_messages', 'customMessages'],
@@ -319,8 +320,28 @@ export function ChannelCredentialFields({
       matchesEndpointPreset(llmEndpoint || defaultEndpoint || '', preset.endpoint),
     )?.modelsUrl;
     const codexOAuthSelected = descriptor?.authRequirement === 'o_auth';
+    const agentMaestroSelected = providerType === 'agent-maestro';
+    const thinkingToggle =
+      supportsThinking && !agentMaestroSelected ? (
+        <LlmThinkingToggle
+          enabled={prefs?.llmThinkingEnabled ?? false}
+          onToggle={onLlmThinkingToggle}
+        />
+      ) : undefined;
     return (
       <>
+        {agentMaestroSelected && (
+          <p
+            style={{
+              fontSize: 11.5,
+              color: 'var(--ol-ink-4)',
+              lineHeight: 1.6,
+              margin: '2px 0 10px',
+            }}
+          >
+            {t('settings.providers.agentMaestroHint')}
+          </p>
+        )}
         {!!descriptor.supportedRequestFormats?.length && descriptor.defaultRequestFormat && (
           <LlmProtocolFields
             channelId={channelId}
@@ -435,12 +456,7 @@ export function ChannelCredentialFields({
             defaultModel={defaultModel ?? ''}
             onUserMutation={onLlmMutation}
             onBlockedChange={trackField}
-            trailing={
-              <LlmThinkingToggle
-                enabled={prefs?.llmThinkingEnabled ?? false}
-                onToggle={onLlmThinkingToggle}
-              />
-            }
+            trailing={thinkingToggle}
           />
         ) : (
           <CredentialField
@@ -458,14 +474,7 @@ export function ChannelCredentialFields({
             hint={azureOpenai ? t('settings.providers.azureDeploymentHint') : undefined}
             onUserMutation={onLlmMutation}
             onBlockedChange={trackField}
-            trailing={
-              supportsThinking ? (
-                <LlmThinkingToggle
-                  enabled={prefs?.llmThinkingEnabled ?? false}
-                  onToggle={onLlmThinkingToggle}
-                />
-              ) : undefined
-            }
+            trailing={thinkingToggle}
           />
         )}
         {azureOpenai && (
@@ -1645,6 +1654,8 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
     'azureEndpointConflict',
     'azureUnsupportedProtocol',
     'azureManualDeployment',
+    'agentMaestroEndpointInvalid',
+    'agentMaestroModelsInvalid',
   ]) {
     if (message.includes(code)) return t(`settings.providers.${code}`);
   }

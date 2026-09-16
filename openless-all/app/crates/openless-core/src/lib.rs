@@ -37,6 +37,7 @@ mod hotkey_interpreter;
 pub mod language_catalog;
 mod less_computer;
 pub mod llm_gemini;
+mod agent_maestro;
 pub mod llm_protocol;
 mod marketplace;
 pub mod model_store;

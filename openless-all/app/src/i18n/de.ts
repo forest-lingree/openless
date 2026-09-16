@@ -1288,6 +1288,7 @@ export const de: typeof zhCN = {
         'Die beiden Modi speichern ihre Zugangsdaten vollständig getrennt. Beim Wechsel bleiben die Daten des anderen Modus gespeichert und werden beim Zurückwechseln wieder verwendet.',
       presets: {
         lmstudio: 'LM Studio',
+        agentMaestro: 'Agent Maestro',
         opencode: 'OpenCode Zen',
         tencentTokenHub: 'Tencent Cloud TokenHub',
         customChatCompletions: 'Benutzerdefiniert · Chat Completions',
@@ -1380,6 +1381,8 @@ export const de: typeof zhCN = {
         'Verwendet die Zugangsdaten der Tencent-Cloud-Spracherkennung. Das Standardmodell Hy-ASR-3.0-preview unterstützt Chinesisch, Englisch und 20 Dialekte; Preview nimmt nur Mono-PCM mit 16 kHz bis 60 Sekunden an und unterstützt noch keinen Kontext oder Hotword-Boosting.',
       tencentTokenHubNote:
         'Es werden nur aktuell verfügbare Sprachmodelle angezeigt. Einige Modelle nutzen immer Reasoning; das Ausschalten von Reasoning behält das feste Verhalten des jeweiligen Modells bei.',
+      agentMaestroHint:
+        'Lassen Sie Agent Maestro in VS Code laufen und melden Sie sich bei Copilot an. Laden Sie ein Copilot-Modell oder geben Sie seine ID manuell ein. Wenn keine Modelle erscheinen, prüfen Sie Ihren Copilot-Zugriff. Der API-Schlüssel ist optional; wenn er auf dem Server konfiguriert ist, verwenden Sie hier denselben Schlüssel. Für die Generierung werden die Copilot-Standardwerte verwendet.',
       localAsrActiveNotice:
         'Lokale ASR ({{name}}) ist aktuell aktiv. Wechsle oder deaktiviere sie unter „Erweitert“.',
       localAsrTakeoverHint:
@@ -1499,6 +1502,8 @@ export const de: typeof zhCN = {
       endpointHttpWarning:
         'HTTP-Endpunkte sind erlaubt, aber API-Schlüssel und Anfrageinhalte können bei der Übertragung abgefangen werden.',
       endpointInvalid: 'Das Endpunktformat ist ungültig.',
+      agentMaestroEndpointInvalid:
+        'Verwenden Sie eine HTTP(S)-Base-URL, die auf /api/openai/v1 endet; optional darf dahinter noch /chat/completions stehen.',
       bailianEndpointSchemeInvalid:
         'Bailian Echtzeit-ASR verwendet das DashScope-WebSocket-Gateway. Der Endpunkt muss mit wss:// beginnen (Standard: wss://dashscope.aliyuncs.com/api-ws/v1/inference/). Eine https://-URL im Kompatibilitätsmodus funktioniert hier nicht.',
       qwen3EndpointSchemeInvalid:
@@ -1510,6 +1515,8 @@ export const de: typeof zhCN = {
       endpointMissing: 'Der Endpunkt ist leer.',
       volcengineAppIdMissing: 'Die APP ID ist leer.',
       volcengineAccessTokenMissing: 'Der Access Token ist leer.',
+      agentMaestroModelsInvalid:
+        'Agent Maestro hat eine ungültige Modellliste zurückgegeben. Prüfen Sie die API-Adresse und die Serverversion.',
       requestTimeout: 'Zeitüberschreitung bei der Anfrage. Versuche es später erneut.',
     },
     shortcuts: {
